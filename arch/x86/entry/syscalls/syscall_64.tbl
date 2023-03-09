@@ -373,6 +373,8 @@
 447	common	orbit_mmap __x64_sys_orbit_mmap
 448	common	orbit_mmap_pair __x64_sys_orbit_mmap_pair
 449	common	orbit_cancel __x64_sys_orbit_cancel
+450	common	phx_preserve		__x64_sys_phx_preserve
+451	common	phx_get_preserved	__x64_sys_phx_get_preserved
 
 #
 # x32-specific system call numbers start at 512 to avoid cache impact

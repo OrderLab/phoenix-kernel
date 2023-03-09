@@ -1526,3 +1526,126 @@ fail_nomem:
 	retval = -ENOMEM;
 	goto out;
 }
+
+SYSCALL_DEFINE3(phx_preserve, void __user *, data,
+		void __user *, start, void __user *, end)
+{
+	struct task_struct *cur = current;
+	struct mm_struct *mm = cur->mm;
+	struct vm_area_struct *vma = find_vma(mm, start);
+	// TODO: fix this
+	struct vma_snapshot *snap = kmalloc(sizeof(*snap), GFP_KERNEL);
+	snap_init(snap);
+
+	enum update_mode mode = ORBIT_UPDATE_MARK;
+
+	pr_info(PREFIX "phx_preserve vma start %016lx end %016x\n",
+			vma->vm_start, vma->vm_end);
+
+	int ret = update_page_range(NULL, mm, NULL, vma, start, end, mode, snap);
+	pr_info(PREFIX "phx_preserve snap ret=%d count=%d\n", ret, snap->count);
+
+	cur->phx_user_data = data;
+	cur->phx_user_start = start;
+	cur->phx_user_end = end;
+	cur->phx_snap = snap;
+	return 0;
+}
+
+SYSCALL_DEFINE3(phx_get_preserved, void __user **, data,
+		void __user **, start, void __user **, end)
+{
+	struct task_struct *cur = current;
+	struct mm_struct *mm = cur->mm;
+	struct vm_area_struct *vma = find_vma(mm, (unsigned long)cur->phx_user_start);
+	struct vma_snapshot *snap = cur->phx_snap;
+	// FIXME
+
+	if (cur->phx_user_data == NULL) {
+		*data = *start = *end = NULL;
+		return 0;
+	}
+
+	pr_info(PREFIX "phx_get_preserved get mm=%lx vma=%lx snap=%lx cnt=%d\n",
+			mm, vma, snap, snap ? snap->count : -1);
+
+	pr_info(PREFIX "phx_get_preserved prev addr start %016lx end %016lx\n",
+			(unsigned long)cur->phx_user_start, (unsigned long)cur->phx_user_end);
+
+	if (vma)
+		pr_info(PREFIX "phx_get_preserved vma exist!!\n\tstart %016lx end %016lx\n",
+				(unsigned long)vma->vm_start, (unsigned long)vma->vm_end);
+
+	enum update_mode mode = ORBIT_UPDATE_APPLY;
+
+	if (1 || !vma) {
+		unsigned long start = (unsigned long)cur->phx_user_start;
+		unsigned long end = (unsigned long)cur->phx_user_end;
+		/* void *area = ksys_mmap_pgoff(start, end - start, */
+		void *area = ksys_mmap_pgoff(start, 2UL * 0x40000000UL,
+					PROT_READ | PROT_WRITE,
+					MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		pr_info(PREFIX "phx mmap in kernel area=%lx\n", area);
+		vma = find_vma(mm, start);
+		pr_info(PREFIX "phx new vma=%lx\n", vma);
+	}
+
+	int ret = update_page_range(mm, NULL, vma, NULL,
+			(unsigned long)cur->phx_user_start, (unsigned long)cur->phx_user_end, mode, snap);
+	pr_info(PREFIX "phx_get_preserved apply ret=%d\n", ret);
+
+	pr_info(PREFIX "phx_get_preserved stored *data %016lx *start %016lx *end %016lx\n",
+			(unsigned long)cur->phx_user_data,
+			(unsigned long)cur->phx_user_start, (unsigned long)cur->phx_user_end);
+
+	// FIXME
+	*data = cur->phx_user_data;
+	*start = cur->phx_user_start;
+	*end = cur->phx_user_end;
+	snap_destroy(snap);
+	cur->phx_snap = NULL;
+	return 0;
+}
+
+/* SYSCALL_DEFINE3(phx_get_preserved, void __user **, data,
+		size_t, npool, struct orbit_pool_range __user *, pools)
+{
+	struct task_struct *cur = current;
+	struct mm_struct *mm = cur->mm;
+	struct vm_area_struct *vma = find_vma(mm, cur->phx_user_start);
+	struct vma_snapshot *snap = cur->phx_snap;
+	// FIXME
+
+	if (cur->phx_user_data == NULL) {
+		*data = *start = *end = NULL;
+		return 0;
+	}
+
+	pr_info(PREFIX "phx_get_preserved get mm=%lx vma=%lx snap=%lx cnt=%d\n",
+			mm, vma, snap, snap ? snap->count : -1);
+
+	enum update_mode mode = ORBIT_UPDATE_APPLY;
+
+	if (!vma) {
+		unsigned long start = cur->phx_user_start;
+		unsigned long end = cur->phx_user_end;
+		void *area = ksys_mmap_pgoff(start, end - start,
+					PROT_READ | PROT_WRITE,
+					MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		pr_info(PREFIX "phx mmap in kernel area=%lx\n", area);
+		vma = find_vma(mm, start);
+		pr_info(PREFIX "phx new vma=%lx\n", vma);
+	}
+
+	int ret = update_page_range(mm, NULL, vma, NULL,
+			cur->phx_user_start, cur->phx_user_end, mode, snap);
+	pr_info(PREFIX "phx_get_preserved apply ret=%d\n", ret);
+
+	// FIXME
+	*data = cur->phx_user_data;
+	*start = cur->phx_user_start;
+	*end = cur->phx_user_end;
+	snap_destroy(snap);
+	cur->phx_snap = NULL;
+	return 0;
+} */

@@ -824,6 +824,14 @@ struct task_struct {
 	struct list_head orbit_sibling;
 	obid_t last_obid;
 
+	void __user *phx_user_data;
+	void __user *phx_user_start;
+	void __user *phx_user_end;
+	void *phx_snap;
+
+	// void *phx_snaps;
+	// size_t phx_nsnap;
+
 	/*
 	 * 'ptraced' is the list of tasks this task is using ptrace() on.
 	 *

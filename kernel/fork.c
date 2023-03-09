@@ -1926,6 +1926,11 @@ static __latent_entropy struct task_struct *copy_process(
 	INIT_LIST_HEAD(&p->orbit_children);
 	INIT_LIST_HEAD(&p->orbit_sibling);
 
+	p->phx_user_data = NULL;
+	p->phx_user_start = NULL;
+	p->phx_user_end = NULL;
+	p->phx_snap = NULL;
+
 	rcu_copy_process(p);
 	p->vfork_done = NULL;
 	spin_lock_init(&p->alloc_lock);

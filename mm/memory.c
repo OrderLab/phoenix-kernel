@@ -5525,6 +5525,8 @@ int update_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	/* Variables to free up dst entries */
 	struct mmu_gather tlb;
 
+	printk("snap: survive 1 addr %016lx end %016lx\n", addr, end);
+
 	/* TODO: check pointers validity */
 	if (mode == ORBIT_UPDATE_APPLY)
 		src_mm = NULL, src_vma = NULL;
@@ -5537,10 +5539,14 @@ int update_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 		update_hiwater_rss(dst_mm);
 	}
 
+	printk("src %p src anon %d\n", src_vma, src_vma && vma_is_anonymous(src_vma));
+	printk("dst %p dst anon %d\n", dst_vma, dst_vma && vma_is_anonymous(dst_vma));
+
 	/* Both mapping should be anonymous */
 	if ((src_vma && !vma_is_anonymous(src_vma)) ||
 	    (dst_vma && !vma_is_anonymous(dst_vma)))
 		return -EINVAL;
+	printk("snap: survive 2");
 
 	/* unmap_vmas(&tlb, vma, addr, end); */
 
@@ -5551,6 +5557,7 @@ int update_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 	/* FIXME: we still need to check this somewhere */
 	if (src_vma && !(src_vma->vm_start <= addr && end <= src_vma->vm_end))
 		return -EINVAL;
+	printk("snap: survive 3");
 
 	/* TODO: handle VM_HUGETLB | VM_PFNMAP | VM_MIXEDMAP */
 
@@ -5564,6 +5571,7 @@ int update_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 		if (ret)
 			return ret; */
 	}
+	printk("snap: survive 4");
 
 	/* TODO: how is cow handled by default... */
 	/*
