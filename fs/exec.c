@@ -27,6 +27,7 @@
 #include <linux/slab.h>
 #include <linux/file.h>
 #include <linux/fdtable.h>
+#include <linux/close_range.h>
 #include <linux/mm.h>
 #include <linux/vmacache.h>
 #include <linux/stat.h>
@@ -289,6 +290,74 @@ err_free:
 	return err;
 }
 
+static int __bprm_phx_mm_init(struct linux_binprm *bprm)
+{
+	int err;
+	struct vm_area_struct *vma = NULL, *old_vma;
+	struct mm_struct *mm = bprm->mm;
+
+	pgprot_t vm_page_prot;
+	unsigned long vm_flags, vm_start, vm_end;
+
+	if (!bprm->phx_args)
+		return 0;
+
+	bprm->vma = vma = vm_area_alloc(mm);
+	if (!vma)
+		return -ENOMEM;
+	vma_set_anonymous(vma);
+
+	/* Copy the vma flags */
+	if (mmap_read_lock_killable(current->mm)) {
+		err = -EINTR;
+		printk("phx: fail to get old vm flags");
+		goto err_free;
+	}
+
+	/* TODO: what if bprm <start,end> spans in multiple VMAs.
+	 * Currently only implement for one VMA */
+	old_vma = find_vma(current->mm, bprm->phx_args->start);
+	if (!old_vma) {
+		mmap_read_unlock(current->mm);
+		err = -EINVAL;
+		printk("phx: fail to find old vma");
+		goto err_free;
+	}
+
+	vm_page_prot = old_vma->vm_page_prot;
+	vm_flags = old_vma->vm_flags;
+	/* Create a same sized VMA instead of only the data range */
+	vm_start = old_vma->vm_start;
+	vm_end = old_vma->vm_end;
+
+	mmap_read_unlock(current->mm);
+
+	if (mmap_write_lock_killable(mm)) {
+		err = -EINTR;
+		goto err_free;
+	}
+
+	/* Put a placeholder vma
+	 * Potentially multiple vmas in the future */
+	vma->vm_start = vm_start;
+	vma->vm_end = vm_end;
+	vma->vm_page_prot = vm_page_prot;
+	vma->vm_flags = vm_flags;
+
+	err = insert_vm_struct(mm, vma);
+	if (err)
+		goto err;
+
+	mmap_write_unlock(mm);
+	return 0;
+err:
+	mmap_write_unlock(mm);
+err_free:
+	bprm->vma = NULL;
+	vm_area_free(vma);
+	return err;
+}
+
 static bool valid_arg_len(struct linux_binprm *bprm, long len)
 {
 	return len <= MAX_ARG_STRLEN;
@@ -374,6 +443,12 @@ static int bprm_mm_init(struct linux_binprm *bprm)
 	task_lock(current->group_leader);
 	bprm->rlim_stack = current->signal->rlim[RLIMIT_STACK];
 	task_unlock(current->group_leader);
+
+	if (bprm->phx_args) {
+		err = __bprm_phx_mm_init(bprm);
+		if (err)
+			goto err;
+	}
 
 	err = __bprm_mm_init(bprm);
 	if (err)
@@ -974,7 +1049,7 @@ EXPORT_SYMBOL(read_code);
  * On success, this function returns with exec_update_lock
  * held for writing.
  */
-static int exec_mmap(struct mm_struct *mm)
+static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args *phx)
 {
 	struct task_struct *tsk;
 	struct mm_struct *old_mm, *active_mm;
@@ -986,6 +1061,45 @@ static int exec_mmap(struct mm_struct *mm)
 	exec_mm_release(tsk, old_mm);
 	if (old_mm)
 		sync_mm_rss(old_mm);
+
+	if (phx) {
+		struct vm_area_struct *old_vma, *new_vma;
+
+		printk("exec phx mode");
+
+		new_vma = find_vma(mm, phx->start);
+		printk("new_vma %p", new_vma);
+		if (new_vma) {
+			printk("new_vma start %lx end %lx",
+					new_vma->vm_start, new_vma->vm_end);
+		}
+		if (!new_vma)
+			return -EINVAL;
+
+		ret = mmap_read_lock_killable(old_mm);
+		if (ret)
+			return ret;
+
+		old_vma = find_vma(old_mm, phx->start);
+		printk("old_vma %p", old_vma);
+		if (old_vma) {
+			printk("old_vma start %lx end %lx",
+					old_vma->vm_start, old_vma->vm_end);
+		}
+		if (!old_vma) {
+			mmap_read_unlock(old_mm);
+			return -EINVAL;
+		}
+
+		ret = move_page_range(new_vma, old_vma);
+		printk("copy range ret %d\n", ret);
+		mmap_read_unlock(old_mm);
+		if (ret)
+			return ret;
+
+		flush_tlb_mm(mm);
+		flush_tlb_mm(old_mm);
+	}
 
 	ret = down_write_killable(&tsk->signal->exec_update_lock);
 	if (ret)
@@ -1268,6 +1382,15 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 */
 	io_uring_task_cancel();
 
+	/*
+	 * Phoenix restarts the process from start, and thus need to act
+	 * similar as a shell. We should reclaim all resource that are not
+	 * reclaimed by `exec`. Here, close all the files even they are not
+	 * CLOEXEC.
+	 */
+	if (bprm->phx_args)
+		__close_range(3, ~0U, CLOSE_RANGE_CLOEXEC);
+
 	/* Ensure the files table is not shared. */
 	retval = unshare_files();
 	if (retval)
@@ -1291,7 +1414,7 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 * Release all of the old mmap stuff
 	 */
 	acct_arg_size(bprm, 0);
-	retval = exec_mmap(bprm->mm);
+	retval = exec_mmap(bprm->mm, bprm->phx_args);
 	if (retval)
 		goto out;
 
@@ -1509,12 +1632,15 @@ static void free_bprm(struct linux_binprm *bprm)
 	kfree(bprm);
 }
 
-static struct linux_binprm *alloc_bprm(int fd, struct filename *filename)
+static struct linux_binprm *alloc_bprm(int fd, struct filename *filename,
+		struct kernel_phx_args *phx)
 {
 	struct linux_binprm *bprm = kzalloc(sizeof(*bprm), GFP_KERNEL);
 	int retval = -ENOMEM;
 	if (!bprm)
 		goto out;
+
+	bprm->phx_args = phx;
 
 	if (fd == AT_FDCWD || filename->name[0] == '/') {
 		bprm->filename = filename->name;
@@ -1873,7 +1999,8 @@ out_unmark:
 static int do_execveat_common(int fd, struct filename *filename,
 			      struct user_arg_ptr argv,
 			      struct user_arg_ptr envp,
-			      int flags)
+			      int flags,
+			      struct kernel_phx_args *phx)
 {
 	struct linux_binprm *bprm;
 	int retval;
@@ -1897,7 +2024,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 	 * further execve() calls fail. */
 	current->flags &= ~PF_NPROC_EXCEEDED;
 
-	bprm = alloc_bprm(fd, filename);
+	bprm = alloc_bprm(fd, filename, phx);
 	if (IS_ERR(bprm)) {
 		retval = PTR_ERR(bprm);
 		goto out_ret;
@@ -1967,7 +2094,7 @@ int kernel_execve(const char *kernel_filename,
 	if (IS_ERR(filename))
 		return PTR_ERR(filename);
 
-	bprm = alloc_bprm(fd, filename);
+	bprm = alloc_bprm(fd, filename, NULL);
 	if (IS_ERR(bprm)) {
 		retval = PTR_ERR(bprm);
 		goto out_ret;
@@ -2016,7 +2143,42 @@ static int do_execve(struct filename *filename,
 {
 	struct user_arg_ptr argv = { .ptr.native = __argv };
 	struct user_arg_ptr envp = { .ptr.native = __envp };
-	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0, NULL);
+}
+
+SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args __user *, user_args)
+{
+	struct kernel_phx_args args;
+	struct user_arg_ptr argv = {}, envp = {};
+	int ret;
+
+	if (copy_from_user(&args, user_args, sizeof(args)))
+		return -EINVAL;
+
+	argv.ptr.native = args.argv;
+	envp.ptr.native = args.envp;
+
+	ret = do_execveat_common(AT_FDCWD, getname(args.filename), argv, envp, 0, &args);
+	if (ret)
+		return ret;
+
+	current->phx_user_data = args.data;
+	current->phx_start = args.start;
+	current->phx_end = args.end;
+
+	return 0;
+}
+
+SYSCALL_DEFINE3(phx_get_preserved, void __user **, data,
+		unsigned long __user *, start, unsigned long __user *, end)
+{
+	if (put_user(current->phx_user_data, data))
+		return -EINVAL;
+	if (put_user(current->phx_start, start))
+		return -EINVAL;
+	if (put_user(current->phx_end, end))
+		return -EINVAL;
+	return 0;
 }
 
 static int do_execveat(int fd, struct filename *filename,
@@ -2027,7 +2189,7 @@ static int do_execveat(int fd, struct filename *filename,
 	struct user_arg_ptr argv = { .ptr.native = __argv };
 	struct user_arg_ptr envp = { .ptr.native = __envp };
 
-	return do_execveat_common(fd, filename, argv, envp, flags);
+	return do_execveat_common(fd, filename, argv, envp, flags, NULL);
 }
 
 #ifdef CONFIG_COMPAT
@@ -2043,7 +2205,7 @@ static int compat_do_execve(struct filename *filename,
 		.is_compat = true,
 		.ptr.compat = __envp,
 	};
-	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0, NULL);
 }
 
 static int compat_do_execveat(int fd, struct filename *filename,
@@ -2059,7 +2221,7 @@ static int compat_do_execveat(int fd, struct filename *filename,
 		.is_compat = true,
 		.ptr.compat = __envp,
 	};
-	return do_execveat_common(fd, filename, argv, envp, flags);
+	return do_execveat_common(fd, filename, argv, envp, flags, NULL);
 }
 #endif
 

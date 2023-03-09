@@ -22,4 +22,13 @@ struct pt_regs;
 #define AT_FLAGS_PRESERVE_ARGV0_BIT 0
 #define AT_FLAGS_PRESERVE_ARGV0 (1 << AT_FLAGS_PRESERVE_ARGV0_BIT)
 
+struct phx_args {
+	const char *filename;
+	const char *const *argv;
+	const char *const *envp;
+	void *data;
+	void *start;
+	void *end;
+};
+
 #endif /* _UAPI_LINUX_BINFMTS_H */

@@ -966,6 +966,10 @@ struct task_struct {
 	struct list_head		sibling;
 	struct task_struct		*group_leader;
 
+	void __user *			phx_user_data;
+	unsigned long			phx_start;
+	unsigned long			phx_end;
+
 	/*
 	 * 'ptraced' is the list of tasks this task is using ptrace() on.
 	 *

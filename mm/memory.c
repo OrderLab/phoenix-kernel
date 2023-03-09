@@ -1301,6 +1301,263 @@ copy_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	return ret;
 }
 
+static inline void
+move_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
+		 pte_t *dst_pte, pte_t *src_pte, unsigned long addr, int *rss)
+{
+	unsigned long vm_flags = src_vma->vm_flags;
+	pte_t pte = *src_pte;
+	struct page *page;
+
+	page = vm_normal_page(src_vma, addr, pte);
+	if (page)
+		rss[mm_counter(page)]++;
+
+	/*
+	 * If it's a shared mapping, mark it clean in
+	 * the child
+	 */
+	if (vm_flags & VM_SHARED)
+		pte = pte_mkclean(pte);
+	pte = pte_mkold(pte);
+
+	if (!userfaultfd_wp(dst_vma))
+		pte = pte_clear_uffd_wp(pte);
+
+	printk("Setting dst addr %lx with PTE %lx", addr, pte.pte);
+
+	set_pte_at(dst_vma->vm_mm, addr, dst_pte, pte);
+	pte_clear(src_vma->vm_mm, addr, src_pte);
+}
+
+static int
+move_pte_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
+	       pmd_t *dst_pmd, pmd_t *src_pmd, unsigned long addr,
+	       unsigned long end)
+{
+	struct mm_struct *dst_mm = dst_vma->vm_mm;
+	struct mm_struct *src_mm = src_vma->vm_mm;
+	pte_t *orig_src_pte, *orig_dst_pte;
+	pte_t *src_pte, *dst_pte;
+	spinlock_t *src_ptl, *dst_ptl;
+	int progress, ret = 0;
+	int rss[NR_MM_COUNTERS];
+	/* swp_entry_t entry = (swp_entry_t){0}; */
+	/* struct page *prealloc = NULL; */
+	int i;
+
+again:
+	progress = 0;
+	init_rss_vec(rss);
+
+	dst_pte = pte_alloc_map_lock(dst_mm, dst_pmd, addr, &dst_ptl);
+	if (!dst_pte) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	src_pte = pte_offset_map(src_pmd, addr);
+	src_ptl = pte_lockptr(src_mm, src_pmd);
+	spin_lock_nested(src_ptl, SINGLE_DEPTH_NESTING);
+	orig_src_pte = src_pte;
+	orig_dst_pte = dst_pte;
+	arch_enter_lazy_mmu_mode();
+
+	do {
+		/*
+		 * We are holding two locks at this point - either of them
+		 * could generate latencies in another task on another CPU.
+		 */
+		if (progress >= 32) {
+			progress = 0;
+			if (need_resched() ||
+			    spin_needbreak(src_ptl) || spin_needbreak(dst_ptl))
+				break;
+		}
+		if (pte_none(*src_pte)) {
+			progress++;
+			continue;
+		}
+		if (unlikely(!pte_present(*src_pte))) {
+			panic("Unsupported");
+		}
+		move_present_pte(dst_vma, src_vma, dst_pte, src_pte,
+				       addr, rss);
+		progress += 8;
+	} while (dst_pte++, src_pte++, addr += PAGE_SIZE, addr != end);
+
+	arch_leave_lazy_mmu_mode();
+	spin_unlock(src_ptl);
+	pte_unmap(orig_src_pte);
+	add_mm_rss_vec(dst_mm, rss);
+	for (i = 0; i < NR_MM_COUNTERS; ++i)
+		rss[i] = -rss[i];
+	add_mm_rss_vec(src_mm, rss);
+	pte_unmap_unlock(orig_dst_pte, dst_ptl);
+	cond_resched();
+
+	/* We've captured and resolved the error. Reset, try again. */
+	ret = 0;
+
+	if (addr != end)
+		goto again;
+out:
+	return ret;
+}
+
+static inline int
+move_pmd_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
+	       pud_t *dst_pud, pud_t *src_pud, unsigned long addr,
+	       unsigned long end)
+{
+	struct mm_struct *dst_mm = dst_vma->vm_mm;
+	/* struct mm_struct *src_mm = src_vma->vm_mm; */
+	pmd_t *src_pmd, *dst_pmd;
+	unsigned long next;
+
+	dst_pmd = pmd_alloc(dst_mm, dst_pud, addr);
+	if (!dst_pmd)
+		return -ENOMEM;
+	src_pmd = pmd_offset(src_pud, addr);
+	do {
+		next = pmd_addr_end(addr, end);
+		if (is_swap_pmd(*src_pmd) || pmd_trans_huge(*src_pmd)
+			|| pmd_devmap(*src_pmd)) {
+			panic("Unsupported");
+		}
+		if (pmd_none_or_clear_bad(src_pmd))
+			continue;
+		if (move_pte_range(dst_vma, src_vma, dst_pmd, src_pmd,
+				   addr, next))
+			return -ENOMEM;
+	} while (dst_pmd++, src_pmd++, addr = next, addr != end);
+	return 0;
+}
+
+static inline int
+move_pud_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
+	       p4d_t *dst_p4d, p4d_t *src_p4d, unsigned long addr,
+	       unsigned long end)
+{
+	struct mm_struct *dst_mm = dst_vma->vm_mm;
+	/* struct mm_struct *src_mm = src_vma->vm_mm; */
+	pud_t *src_pud, *dst_pud;
+	unsigned long next;
+
+	dst_pud = pud_alloc(dst_mm, dst_p4d, addr);
+	if (!dst_pud)
+		return -ENOMEM;
+	src_pud = pud_offset(src_p4d, addr);
+	do {
+		next = pud_addr_end(addr, end);
+		if (pud_trans_huge(*src_pud) || pud_devmap(*src_pud)) {
+			panic("Unsupported");
+		}
+		if (pud_none_or_clear_bad(src_pud))
+			continue;
+		if (move_pmd_range(dst_vma, src_vma, dst_pud, src_pud,
+				   addr, next))
+			return -ENOMEM;
+	} while (dst_pud++, src_pud++, addr = next, addr != end);
+	return 0;
+}
+
+static inline int
+move_p4d_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
+	       pgd_t *dst_pgd, pgd_t *src_pgd, unsigned long addr,
+	       unsigned long end)
+{
+	struct mm_struct *dst_mm = dst_vma->vm_mm;
+	p4d_t *src_p4d, *dst_p4d;
+	unsigned long next;
+
+	dst_p4d = p4d_alloc(dst_mm, dst_pgd, addr);
+	if (!dst_p4d)
+		return -ENOMEM;
+	src_p4d = p4d_offset(src_pgd, addr);
+	do {
+		next = p4d_addr_end(addr, end);
+		if (p4d_none_or_clear_bad(src_p4d))
+			continue;
+		if (move_pud_range(dst_vma, src_vma, dst_p4d, src_p4d,
+				   addr, next))
+			return -ENOMEM;
+	} while (dst_p4d++, src_p4d++, addr = next, addr != end);
+	return 0;
+}
+
+int
+move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
+{
+	pgd_t *src_pgd, *dst_pgd;
+	unsigned long next;
+	unsigned long addr = src_vma->vm_start;
+	unsigned long end = src_vma->vm_end;
+	struct mm_struct *dst_mm = dst_vma->vm_mm;
+	struct mm_struct *src_mm = src_vma->vm_mm;
+	struct mmu_notifier_range range;
+	int ret;
+
+	/*
+	 * Don't copy ptes where a page fault will fill them correctly.
+	 * Fork becomes much lighter when there are big shared or private
+	 * readonly mappings. The tradeoff is that copy_page_range is more
+	 * efficient than faulting.
+	 */
+	if (!(src_vma->vm_flags & (VM_HUGETLB | VM_PFNMAP | VM_MIXEDMAP)) &&
+	    !src_vma->anon_vma)
+		return 0;
+
+	if (is_vm_hugetlb_page(src_vma))
+		return copy_hugetlb_page_range(dst_mm, src_mm, src_vma);
+
+	if (unlikely(src_vma->vm_flags & VM_PFNMAP)) {
+		/*
+		 * We do not free on error cases below as remove_vma
+		 * gets called on error from higher level routine
+		 */
+		ret = track_pfn_copy(src_vma);
+		if (ret)
+			return ret;
+	}
+
+	/*
+	 * We need to invalidate the secondary MMU mappings only when
+	 * there could be a permission downgrade on the ptes of the
+	 * parent mm. And a permission downgrade will only happen if
+	 * is_cow_mapping() returns true.
+	 */
+	mmu_notifier_range_init(&range, MMU_NOTIFY_PROTECTION_PAGE,
+				0, src_vma, src_mm, addr, end);
+	mmu_notifier_invalidate_range_start(&range);
+	/*
+	 * Disabling preemption is not needed for the write side, as
+	 * the read side doesn't spin, but goes to the mmap_lock.
+	 *
+	 * Use the raw variant of the seqcount_t write API to avoid
+	 * lockdep complaining about preemptibility.
+	 */
+	mmap_assert_write_locked(src_mm);
+	raw_write_seqcount_begin(&src_mm->write_protect_seq);
+
+	ret = 0;
+	dst_pgd = pgd_offset(dst_mm, addr);
+	src_pgd = pgd_offset(src_mm, addr);
+	do {
+		next = pgd_addr_end(addr, end);
+		if (pgd_none_or_clear_bad(src_pgd))
+			continue;
+		if (unlikely(move_p4d_range(dst_vma, src_vma, dst_pgd, src_pgd,
+					    addr, next))) {
+			ret = -ENOMEM;
+			break;
+		}
+	} while (dst_pgd++, src_pgd++, addr = next, addr != end);
+
+	raw_write_seqcount_end(&src_mm->write_protect_seq);
+	mmu_notifier_invalidate_range_end(&range);
+	return ret;
+}
+
 /* Whether we should zap all COWed (private) pages too */
 static inline bool should_zap_cows(struct zap_details *details)
 {
