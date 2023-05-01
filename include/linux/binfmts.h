@@ -63,7 +63,7 @@ struct linux_binprm {
 
 	struct rlimit rlim_stack; /* Saved RLIMIT_STACK used during exec. */
 
-	struct kernel_phx_args *phx_args;
+	struct kernel_phx_args_multi *phx_args;
 
 	char buf[BINPRM_BUF_SIZE];
 } __randomize_layout;
@@ -158,6 +158,19 @@ struct kernel_phx_args {
 	 * provide new set of args allow us to do many more things. */
 	unsigned long start;
 	unsigned long end;
+};
+
+struct kernel_phx_args_multi {
+	const char __user *filename;
+	const char __user *const __user *argv;
+	const char __user *const __user *envp;
+
+	void __user *data;
+	/* We can alternatively get args from /proc, but letting user to
+	 * provide new set of args allow us to do many more things. */
+	unsigned long *start;
+	unsigned long *end;
+	unsigned int len;
 };
 
 #endif /* _LINUX_BINFMTS_H */

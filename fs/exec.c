@@ -293,8 +293,9 @@ err_free:
 static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 {
 	int err;
-	struct vm_area_struct *vma = NULL, *old_vma;
+	struct vm_area_struct *vma = NULL, *old_vma, *next_vma;
 	struct mm_struct *mm = bprm->mm;
+	unsigned int range_index;
 
 	pgprot_t vm_page_prot;
 	unsigned long vm_flags, vm_start, vm_end;
@@ -302,6 +303,8 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	if (!bprm->phx_args)
 		return 0;
 
+
+	/* currently do not consider running out of memory */
 	bprm->vma = vma = vm_area_alloc(mm);
 	if (!vma)
 		return -ENOMEM;
@@ -316,44 +319,57 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 
 	/* TODO: what if bprm <start,end> spans in multiple VMAs.
 	 * Currently only implement for one VMA */
-	old_vma = find_vma(current->mm, bprm->phx_args->start);
-	if (!old_vma) {
-		mmap_read_unlock(current->mm);
-		err = -EINVAL;
-		printk("phx: fail to find old vma");
-		goto err_free;
-	}
+	for (range_index = 0; range_index < bprm->phx_args->len;
+	     ++range_index) {
+	    old_vma = find_vma(current->mm, ((unsigned long *)(bprm->phx_args->start))[range_index]);
+        if (!old_vma) {
+            mmap_read_unlock(current->mm);
+            err = -EINVAL;
+            printk("phx: fail to find old vma");
+            goto err_free;
+        }
 
-	vm_page_prot = old_vma->vm_page_prot;
-	vm_flags = old_vma->vm_flags;
-	/* Create a same sized VMA instead of only the data range */
-	vm_start = old_vma->vm_start;
-	vm_end = old_vma->vm_end;
+        vm_page_prot = old_vma->vm_page_prot;
+        vm_flags = old_vma->vm_flags;
+        /* Create a same sized VMA instead of only the data range */
+        vm_start = old_vma->vm_start;
+        vm_end = old_vma->vm_end;
 
-	mmap_read_unlock(current->mm);
+        mmap_read_unlock(current->mm);
 
-	if (mmap_write_lock_killable(mm)) {
-		err = -EINTR;
-		goto err_free;
-	}
+        if (mmap_write_lock_killable(mm)) {
+            err = -EINTR;
+            goto err_free;
+        }
 
-	/* Put a placeholder vma
-	 * Potentially multiple vmas in the future */
-	vma->vm_start = vm_start;
-	vma->vm_end = vm_end;
-	vma->vm_page_prot = vm_page_prot;
-	vma->vm_flags = vm_flags;
+        /* Put a placeholder vma
+        * Potentially multiple vmas in the future */
+        vma->vm_start = vm_start;
+        vma->vm_end = vm_end;
+        vma->vm_page_prot = vm_page_prot;
+        vma->vm_flags = vm_flags;
 
-	err = insert_vm_struct(mm, vma);
-	if (err)
-		goto err;
+        err = insert_vm_struct(mm, vma);
+        if (err)
+	        goto err;
+	
+	    mmap_write_unlock(mm);
 
-	mmap_write_unlock(mm);
-	return 0;
+	    if (range_index != bprm->phx_args->len - 1) {
+		    next_vma = vm_area_alloc(mm);
+		    // TODO: here should do the error checking
+
+		    vma->vm_next = next_vma;
+		    next_vma->vm_prev = vma;
+		    vma = next_vma;
+        }
+    }
+    return 0;
 err:
 	mmap_write_unlock(mm);
 err_free:
 	bprm->vma = NULL;
+	// TODO: need modify to free all the vmas
 	vm_area_free(vma);
 	return err;
 }
@@ -1049,11 +1065,12 @@ EXPORT_SYMBOL(read_code);
  * On success, this function returns with exec_update_lock
  * held for writing.
  */
-static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args *phx)
+static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
 {
 	struct task_struct *tsk;
 	struct mm_struct *old_mm, *active_mm;
 	int ret;
+    unsigned long start_addr;
 
 	/* Notify parent that we're no longer interested in the old VM */
 	tsk = current;
@@ -1063,42 +1080,47 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args *phx)
 		sync_mm_rss(old_mm);
 
 	if (phx) {
-		struct vm_area_struct *old_vma, *new_vma;
+		unsigned int range_index;
+		for (range_index = 0; range_index < phx->len; ++range_index) {
+            struct vm_area_struct *old_vma, *new_vma;
 
-		printk("exec phx mode");
+            pr_info("exec phx mode");
 
-		new_vma = find_vma(mm, phx->start);
-		printk("new_vma %p", new_vma);
-		if (new_vma) {
-			printk("new_vma start %lx end %lx",
-					new_vma->vm_start, new_vma->vm_end);
-		}
-		if (!new_vma)
-			return -EINVAL;
+	        start_addr = (phx->start)[range_index];
+	    
+            new_vma = find_vma(mm,start_addr);
+            pr_info("new_vma %p", new_vma);
+            if (new_vma) {
+                pr_info("new_vma start %lx end %lx",
+                        new_vma->vm_start, new_vma->vm_end);
+            }
+            if (!new_vma)
+                return -EINVAL;
 
-		ret = mmap_read_lock_killable(old_mm);
-		if (ret)
-			return ret;
+            ret = mmap_read_lock_killable(old_mm);
+            if (ret)
+                return ret;
 
-		old_vma = find_vma(old_mm, phx->start);
-		printk("old_vma %p", old_vma);
-		if (old_vma) {
-			printk("old_vma start %lx end %lx",
-					old_vma->vm_start, old_vma->vm_end);
-		}
-		if (!old_vma) {
-			mmap_read_unlock(old_mm);
-			return -EINVAL;
-		}
+            old_vma = find_vma(old_mm, start_addr);
+            pr_info("old_vma %p", old_vma);
+            if (old_vma) {
+                pr_info("old_vma start %lx end %lx",
+                        old_vma->vm_start, old_vma->vm_end);
+            }
+            if (!old_vma) {
+                mmap_read_unlock(old_mm);
+                return -EINVAL;
+            }
 
-		ret = move_page_range(new_vma, old_vma);
-		printk("copy range ret %d\n", ret);
-		mmap_read_unlock(old_mm);
-		if (ret)
-			return ret;
+            ret = move_page_range(new_vma, old_vma);
+            pr_info("copy range ret %d", ret);
+            mmap_read_unlock(old_mm);
+            if (ret)
+                return ret;
 
-		flush_tlb_mm(mm);
-		flush_tlb_mm(old_mm);
+            flush_tlb_mm(mm);
+            flush_tlb_mm(old_mm);
+        }
 	}
 
 	ret = down_write_killable(&tsk->signal->exec_update_lock);
@@ -1633,7 +1655,7 @@ static void free_bprm(struct linux_binprm *bprm)
 }
 
 static struct linux_binprm *alloc_bprm(int fd, struct filename *filename,
-		struct kernel_phx_args *phx)
+		struct kernel_phx_args_multi *phx)
 {
 	struct linux_binprm *bprm = kzalloc(sizeof(*bprm), GFP_KERNEL);
 	int retval = -ENOMEM;
@@ -2000,7 +2022,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 			      struct user_arg_ptr argv,
 			      struct user_arg_ptr envp,
 			      int flags,
-			      struct kernel_phx_args *phx)
+			      struct kernel_phx_args_multi *phx)
 {
 	struct linux_binprm *bprm;
 	int retval;
@@ -2148,7 +2170,7 @@ static int do_execve(struct filename *filename,
 
 SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args __user *, user_args)
 {
-	struct kernel_phx_args args;
+	struct kernel_phx_args_multi args;
 	struct user_arg_ptr argv = {}, envp = {};
 	int ret;
 
@@ -2165,19 +2187,23 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args __user *, user_args)
 	current->phx_user_data = args.data;
 	current->phx_start = args.start;
 	current->phx_end = args.end;
-
+	current->len = args.len;
+    
 	return 0;
 }
 
-SYSCALL_DEFINE3(phx_get_preserved, void __user **, data,
-		unsigned long __user *, start, unsigned long __user *, end)
+SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
+		unsigned long __user *, start, unsigned long __user *, end, unsigned long __user , len)
 {
 	if (put_user(current->phx_user_data, data))
 		return -EINVAL;
-	if (put_user(current->phx_start, start))
+	if (put_user(current->phx_start, &start))
 		return -EINVAL;
-	if (put_user(current->phx_end, end))
+	if (put_user(current->phx_end, &end))
 		return -EINVAL;
+	if (put_user(current->len, &len))
+		return -EINVAL;
+	
 	return 0;
 }
 
