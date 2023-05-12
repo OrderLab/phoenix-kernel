@@ -295,8 +295,8 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	int err;
 	struct vm_area_struct *vma = NULL, *old_vma, *next_vma;
 	struct mm_struct *mm = bprm->mm;
-	unsigned int range_index;
-
+	int range_index = -2;
+	unsigned long start_addr;
 	pgprot_t vm_page_prot;
 	unsigned long vm_flags, vm_start, vm_end;
 
@@ -319,16 +319,29 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 
 	/* TODO: what if bprm <start,end> spans in multiple VMAs.
 	 * Currently only implement for one VMA */
-	for (range_index = 0; range_index < bprm->phx_args->len;
+	printk("phx: start copying vmas");
+	for (range_index = 0; range_index < (int)bprm->phx_args->len;
 	     ++range_index) {
-	    old_vma = find_vma(current->mm, ((unsigned long *)(bprm->phx_args->start))[range_index]);
+		printk("copy with index: %d", range_index);
+
+		/* TODO:
+            Here we assume the start and end pointer is in the same vma
+            Should be modified to support if start and end pointer is in
+            different vmas
+        */
+		start_addr =
+			((unsigned long *)(bprm->phx_args->start))[range_index];
+		
+	    old_vma = find_vma(current->mm, start_addr);
         if (!old_vma) {
             mmap_read_unlock(current->mm);
             err = -EINVAL;
             printk("phx: fail to find old vma");
             goto err_free;
-        }
+	    }
 
+	    printk("phx: start_addr: %lx with old_vma: %lx\n", start_addr,
+		   old_vma);
         vm_page_prot = old_vma->vm_page_prot;
         vm_flags = old_vma->vm_flags;
         /* Create a same sized VMA instead of only the data range */
@@ -349,13 +362,18 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
         vma->vm_page_prot = vm_page_prot;
         vma->vm_flags = vm_flags;
 
+
+        printk("phx: vma start: %lx, end: %lx, flags: %lx\n",
+                vma->vm_start, vma->vm_end, vma->vm_flags);
         err = insert_vm_struct(mm, vma);
-        if (err)
+        if (err){
+            printk("phx: fail to insert vm struct");
 	        goto err;
+        }
 	
 	    mmap_write_unlock(mm);
 
-	    if (range_index != bprm->phx_args->len - 1) {
+	    if (range_index != (int)bprm->phx_args->len - 1) {
 		    next_vma = vm_area_alloc(mm);
 		    // TODO: here should do the error checking
 
@@ -1080,18 +1098,21 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
 		sync_mm_rss(old_mm);
 
 	if (phx) {
-		unsigned int range_index;
-		for (range_index = 0; range_index < phx->len; ++range_index) {
-            struct vm_area_struct *old_vma, *new_vma;
+		int range_index = 0;
 
-            pr_info("exec phx mode");
 
-	        start_addr = (phx->start)[range_index];
-	    
+		printk("exec phx mode with phx len: %ld", phx->len);
+		// move the page that contains the pointer as well
+		for (range_index = 0; range_index < (int)phx->len; ++range_index) {
+			struct vm_area_struct *old_vma, *new_vma;
+
+            start_addr = (phx->start)[range_index];
+			printk("looking for vma for start_addr: %lx",
+				start_addr);
             new_vma = find_vma(mm,start_addr);
-            pr_info("new_vma %p", new_vma);
+            printk("new_vma %lx", (unsigned long)new_vma);
             if (new_vma) {
-                pr_info("new_vma start %lx end %lx",
+                printk("new_vma start %lx end %lx",
                         new_vma->vm_start, new_vma->vm_end);
             }
             if (!new_vma)
@@ -1102,9 +1123,9 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
                 return ret;
 
             old_vma = find_vma(old_mm, start_addr);
-            pr_info("old_vma %p", old_vma);
+            printk("old_vma %lx", (unsigned long)old_vma);
             if (old_vma) {
-                pr_info("old_vma start %lx end %lx",
+                printk("old_vma start %lx end %lx",
                         old_vma->vm_start, old_vma->vm_end);
             }
             if (!old_vma) {
@@ -1113,7 +1134,7 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
             }
 
             ret = move_page_range(new_vma, old_vma);
-            pr_info("copy range ret %d", ret);
+            printk("copy range ret %d", ret);
             mmap_read_unlock(old_mm);
             if (ret)
                 return ret;
@@ -1121,6 +1142,7 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
             flush_tlb_mm(mm);
             flush_tlb_mm(old_mm);
         }
+	    printk("finish moving page range for phx");
 	}
 
 	ret = down_write_killable(&tsk->signal->exec_update_lock);
@@ -2168,11 +2190,12 @@ static int do_execve(struct filename *filename,
 	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0, NULL);
 }
 
-SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args __user *, user_args)
+SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 {
 	struct kernel_phx_args_multi args;
 	struct user_arg_ptr argv = {}, envp = {};
-	int ret;
+	int ret, i;
+	unsigned long *start, *end;
 
 	if (copy_from_user(&args, user_args, sizeof(args)))
 		return -EINVAL;
@@ -2180,28 +2203,61 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args __user *, user_args)
 	argv.ptr.native = args.argv;
 	envp.ptr.native = args.envp;
 
+	printk("phx: len: %lu\n", args.len);
+	printk("phx: start args: %lx\n", args.start);
+	printk("phx: end args: %lx\n", args.end);
+	printk("phx real start addresses: ");
+	for (i = 0; i < args.len; i++)
+		printk("%lx ", args.start[i]);
+	printk("\n");
+	printk("phx real end addresses: ");
+	for (i = 0; i < args.len; i++)
+		printk("%lx ", args.end[i]);
+	printk("\n");
+		// rebuild an array to store the ranges
+	start = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
+	for (i = 0; i < args.len; i++)
+		start[i] = args.start[i];
+	end = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
+	for (i = 0; i < args.len; i++)
+        end[i] = args.end[i];
 	ret = do_execveat_common(AT_FDCWD, getname(args.filename), argv, envp, 0, &args);
 	if (ret)
 		return ret;
 
+
+	
 	current->phx_user_data = args.data;
-	current->phx_start = args.start;
-	current->phx_end = args.end;
+	current->phx_start = start;
+	current->phx_end = end;
 	current->len = args.len;
-    
+
+	printk("current phx: user_data: %lx\n", current->phx_user_data);
+	printk("current phx: start: %lx\n", current->phx_start);
+	printk("current phx: end: %lx\n", current->phx_end);
+	printk("current phx: len: %lu\n", current->len);
+	
 	return 0;
 }
 
 SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
-		unsigned long __user *, start, unsigned long __user *, end, unsigned long __user , len)
+		unsigned long __user **, start, unsigned long __user **, end, unsigned int __user *, len)
 {
-	if (put_user(current->phx_user_data, data))
+	int i;
+	if (put_user(current->phx_user_data, data)) {
 		return -EINVAL;
-	if (put_user(current->phx_start, &start))
-		return -EINVAL;
-	if (put_user(current->phx_end, &end))
-		return -EINVAL;
-	if (put_user(current->len, &len))
+    }
+    for (i = 0; i < current->len; i++) {
+		printk("phx: start: %lx\n", current->phx_start[i]);
+		printk("copy to %lx\n", &(((unsigned long *)(*start))[i]));
+        if (put_user((current->phx_start[i]), &(((unsigned long *)(*start))[i])))
+			return -EINVAL;
+        printk("phx: end: %lx\n", current->phx_end[i]);
+        if (put_user((current->phx_end[i]), &(((unsigned long *)(*end))[i]))) 
+            return -EINVAL;
+    }
+    printk("phx: len: %lu\n", current->len);
+	if (put_user(current->len, len))
 		return -EINVAL;
 	
 	return 0;
