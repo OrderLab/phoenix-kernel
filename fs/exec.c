@@ -318,17 +318,12 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	}
 
 	/* TODO: what if bprm <start,end> spans in multiple VMAs.
-	 * Currently only implement for one VMA */
+	 * Currently only implement a possible solution for multiple VMAs */
 	printk("phx: start copying vmas");
 	for (range_index = 0; range_index < (int)bprm->phx_args->len;
 	     ++range_index) {
 		printk("copy with index: %d", range_index);
 
-		/* TODO:
-            Here we assume the start and end pointer is in the same vma
-            Should be modified to support if start and end pointer is in
-            different vmas
-        */
 		start_addr =
 			((unsigned long *)(bprm->phx_args->start))[range_index];
 		
@@ -387,7 +382,10 @@ err:
 	mmap_write_unlock(mm);
 err_free:
 	bprm->vma = NULL;
-	// TODO: need modify to free all the vmas
+	
+    /* TODO: need modify to free all the vmas 
+     * may need an extra structure to record allocated vmas? */
+	
 	vm_area_free(vma);
 	return err;
 }
@@ -1102,7 +1100,6 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
 
 
 		printk("exec phx mode with phx len: %ld", phx->len);
-		// move the page that contains the pointer as well
 		for (range_index = 0; range_index < (int)phx->len; ++range_index) {
 			struct vm_area_struct *old_vma, *new_vma;
 
@@ -2214,7 +2211,8 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	for (i = 0; i < args.len; i++)
 		printk("%lx ", args.end[i]);
 	printk("\n");
-		// rebuild an array to store the ranges
+	// rebuild an array to store the ranges
+	/* TODO: should do the error checking on allocation? */
 	start = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
 	for (i = 0; i < args.len; i++)
 		start[i] = args.start[i];
