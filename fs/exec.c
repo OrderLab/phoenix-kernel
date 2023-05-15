@@ -290,20 +290,40 @@ err_free:
 	return err;
 }
 
+static bool has_vma(struct vm_area_struct **copied_vmas, struct vm_area_struct *target_vma_ptr, const int len)
+{
+	int i;
+	bool has_vma = false;
+	for (i = 0; i < len; ++i) {
+        if (copied_vmas[i] == target_vma_ptr) {
+            has_vma = true;
+            break;
+        }
+	}
+	return has_vma;
+}
+
 static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 {
 	int err;
-	struct vm_area_struct *vma = NULL, *old_vma, *next_vma;
+	struct vm_area_struct *vma = NULL, *old_vma;
 	struct mm_struct *mm = bprm->mm;
-	int range_index = -2;
+	unsigned int range_index;
 	unsigned long start_addr;
 	pgprot_t vm_page_prot;
 	unsigned long vm_flags, vm_start, vm_end;
+	struct vm_area_struct **old_vmas;
+    unsigned int old_vmas_len = 0;
 
 	if (!bprm->phx_args)
 		return 0;
 
 
+	// allocate an array of length bprm->phx_args->len, to store the old_vmas
+	old_vmas =
+		kmalloc(sizeof(struct vm_area_struct *) * bprm->phx_args->len,
+			GFP_KERNEL);
+	
 	/* currently do not consider running out of memory */
 	bprm->vma = vma = vm_area_alloc(mm);
 	if (!vma)
@@ -320,13 +340,28 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	/* TODO: what if bprm <start,end> spans in multiple VMAs.
 	 * Currently only implement a possible solution for multiple VMAs */
 	printk("phx: start copying vmas");
-	for (range_index = 0; range_index < (int)bprm->phx_args->len;
+	for (range_index = 0; range_index < bprm->phx_args->len;
 	     ++range_index) {
 		printk("copy with index: %d", range_index);
 
-		start_addr =
-			((unsigned long *)(bprm->phx_args->start))[range_index];
-		
+		if (range_index != 0) {
+	        // allocate a new vma
+	        vma = vm_area_alloc(mm);
+            if (!vma) {
+                mmap_read_unlock(current->mm);
+                err = -ENOMEM;
+                printk("phx: fail to allocate new vma");
+                goto err_free;
+	        }
+            vma_set_anonymous(vma);
+        }
+
+		if (bprm->phx_args->len == 0) {
+            start_addr = 0;
+		} else {
+            start_addr =
+                ((unsigned long *)(bprm->phx_args->start))[range_index];
+        }
 	    old_vma = find_vma(current->mm, start_addr);
         if (!old_vma) {
             mmap_read_unlock(current->mm);
@@ -335,6 +370,20 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
             goto err_free;
 	    }
 
+	    // if already has the vma, skip
+	    if (has_vma(old_vmas, old_vma, old_vmas_len)) {
+            printk("phx: already has the vma");
+            mmap_read_unlock(current->mm);
+
+            // free the vma
+            vm_area_free(vma);
+            continue;
+	    }
+
+	    // insert the old vma into the array
+	    old_vmas[old_vmas_len] = old_vma;
+	    old_vmas_len++;
+	    
 	    printk("phx: start_addr: %lx with old_vma: %lx\n", start_addr,
 		   old_vma);
         vm_page_prot = old_vma->vm_page_prot;
@@ -358,8 +407,9 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
         vma->vm_flags = vm_flags;
 
 
-        printk("phx: vma start: %lx, end: %lx, flags: %lx\n",
-                vma->vm_start, vma->vm_end, vma->vm_flags);
+	    printk("phx: vma start: %lx, end: %lx, flags: %lx\n", vma->vm_start,
+	       vma->vm_end, vma->vm_flags);
+	    
         err = insert_vm_struct(mm, vma);
         if (err){
             printk("phx: fail to insert vm struct");
@@ -368,15 +418,12 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	
 	    mmap_write_unlock(mm);
 
-	    if (range_index != (int)bprm->phx_args->len - 1) {
-		    next_vma = vm_area_alloc(mm);
-		    // TODO: here should do the error checking
+	}
 
-		    vma->vm_next = next_vma;
-		    next_vma->vm_prev = vma;
-		    vma = next_vma;
-        }
-    }
+
+	printk("phx: finish copying vmas");
+	// free the old vmas
+	kfree(old_vmas);
     return 0;
 err:
 	mmap_write_unlock(mm);
@@ -387,6 +434,7 @@ err_free:
      * may need an extra structure to record allocated vmas? */
 	
 	vm_area_free(vma);
+    printk("phx: fail to copy vmas");
 	return err;
 }
 
@@ -1137,7 +1185,7 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
                 return ret;
 
             flush_tlb_mm(mm);
-            flush_tlb_mm(old_mm);
+	        flush_tlb_mm(old_mm);
         }
 	    printk("finish moving page range for phx");
 	}
@@ -2193,6 +2241,7 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	struct user_arg_ptr argv = {}, envp = {};
 	int ret, i;
 	unsigned long *start, *end;
+	void **data;
 
 	if (copy_from_user(&args, user_args, sizeof(args)))
 		return -EINVAL;
@@ -2211,6 +2260,11 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	for (i = 0; i < args.len; i++)
 		printk("%lx ", args.end[i]);
 	printk("\n");
+	// rebuild an array to store the data pointers
+	data = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
+	for (i = 0; i < args.len; i++)
+		data[i] = (void *)((unsigned long *)args.data)[i];
+	
 	// rebuild an array to store the ranges
 	/* TODO: should do the error checking on allocation? */
 	start = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
@@ -2218,14 +2272,17 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 		start[i] = args.start[i];
 	end = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
 	for (i = 0; i < args.len; i++)
-        end[i] = args.end[i];
+		end[i] = args.end[i];
+
+	args.start = start;
+	args.end = end;
 	ret = do_execveat_common(AT_FDCWD, getname(args.filename), argv, envp, 0, &args);
 	if (ret)
 		return ret;
 
 
 	
-	current->phx_user_data = args.data;
+	current->phx_user_data = data;
 	current->phx_start = start;
 	current->phx_end = end;
 	current->len = args.len;
@@ -2242,10 +2299,15 @@ SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
 		unsigned long __user **, start, unsigned long __user **, end, unsigned int __user *, len)
 {
 	int i;
-	if (put_user(current->phx_user_data, data)) {
-		return -EINVAL;
-    }
-    for (i = 0; i < current->len; i++) {
+	// if (put_user(current->phx_user_data, data)) {
+	// 	return -EINVAL;
+    // }
+	for (i = 0; i < current->len; i++) {
+		printk("phx: ptr for data%d: %lx\n", i,
+		       ((unsigned long *)current->phx_user_data)[i]);
+		printk("copy to %lx\n", &(((unsigned long *)(*data))[i]));
+        if (put_user(((unsigned long *)current->phx_user_data)[i], &(((unsigned long *)(*data))[i])))
+            return -EINVAL;
 		printk("phx: start: %lx\n", current->phx_start[i]);
 		printk("copy to %lx\n", &(((unsigned long *)(*start))[i]));
         if (put_user((current->phx_start[i]), &(((unsigned long *)(*start))[i])))
