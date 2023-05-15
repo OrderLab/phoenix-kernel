@@ -312,8 +312,8 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	unsigned long start_addr;
 	pgprot_t vm_page_prot;
 	unsigned long vm_flags, vm_start, vm_end;
-	struct vm_area_struct **old_vmas;
-    unsigned int old_vmas_len = 0;
+	struct vm_area_struct **old_vmas, **allocated_vmas;
+    unsigned int old_vmas_len = 0, allocated_vmas_len = 0;
 
 	if (!bprm->phx_args)
 		return 0;
@@ -323,12 +323,29 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	old_vmas =
 		kmalloc(sizeof(struct vm_area_struct *) * bprm->phx_args->len,
 			GFP_KERNEL);
+	if (!old_vmas) {
+		err = -ENOMEM;
+        printk("phx: fail to allocate old_vmas");
+        return err;
+	}
+
+	// allocate an array to record the allocated vmas
+	allocated_vmas =
+		kmalloc(sizeof(struct vm_area_struct *) * bprm->phx_args->len,
+			GFP_KERNEL);
+	if (!allocated_vmas) {
+        err = -ENOMEM;
+        printk("phx: fail to allocate allocated_vmas");
+        return err;
+    }
 	
 	/* currently do not consider running out of memory */
 	bprm->vma = vma = vm_area_alloc(mm);
 	if (!vma)
 		return -ENOMEM;
 	vma_set_anonymous(vma);
+	allocated_vmas[allocated_vmas_len] = vma;
+	allocated_vmas_len++;
 
 	/* Copy the vma flags */
 	if (mmap_read_lock_killable(current->mm)) {
@@ -353,7 +370,9 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
                 printk("phx: fail to allocate new vma");
                 goto err_free;
 	        }
-            vma_set_anonymous(vma);
+		    vma_set_anonymous(vma);
+		    allocated_vmas[allocated_vmas_len] = vma;
+		    allocated_vmas_len++;
         }
 
 		if (bprm->phx_args->len == 0) {
@@ -422,8 +441,9 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 
 
 	printk("phx: finish copying vmas");
-	// free the old vmas
+	// free the old vmas and allocated vmas
 	kfree(old_vmas);
+	kfree(allocated_vmas);
     return 0;
 err:
 	mmap_write_unlock(mm);
@@ -432,9 +452,15 @@ err_free:
 	
     /* TODO: need modify to free all the vmas 
      * may need an extra structure to record allocated vmas? */
+
+	// free the allocated vmas
+	for (range_index = 0; range_index < allocated_vmas_len; ++range_index) {
+        vm_area_free(allocated_vmas[range_index]);
+	}
+	kfree(allocated_vmas);
 	
-	vm_area_free(vma);
-    printk("phx: fail to copy vmas");
+	kfree(old_vmas);
+	printk("phx: fail to copy vmas");
 	return err;
 }
 
@@ -2262,24 +2288,40 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	printk("\n");
 	// rebuild an array to store the data pointers
 	data = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
+	if (!data) {
+		return -ENOMEM;
+    }
 	for (i = 0; i < args.len; i++)
 		data[i] = (void *)((unsigned long *)args.data)[i];
 	
 	// rebuild an array to store the ranges
 	/* TODO: should do the error checking on allocation? */
 	start = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
+	if (!start) {
+        kfree(data);
+        return -ENOMEM;
+    }
 	for (i = 0; i < args.len; i++)
 		start[i] = args.start[i];
 	end = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
+	if (!end) {
+        kfree(data);
+        kfree(start);
+        return -ENOMEM;
+    }
 	for (i = 0; i < args.len; i++)
 		end[i] = args.end[i];
 
 	args.start = start;
 	args.end = end;
 	ret = do_execveat_common(AT_FDCWD, getname(args.filename), argv, envp, 0, &args);
-	if (ret)
+	if (ret) {
+		kfree(data);
+		kfree(start);
+		kfree(end);
 		return ret;
-
+    }
+		
 
 	
 	current->phx_user_data = data;
