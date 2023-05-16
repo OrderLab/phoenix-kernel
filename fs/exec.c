@@ -450,9 +450,6 @@ err:
 err_free:
 	bprm->vma = NULL;
 	
-    /* TODO: need modify to free all the vmas 
-     * may need an extra structure to record allocated vmas? */
-
 	// free the allocated vmas
 	for (range_index = 0; range_index < allocated_vmas_len; ++range_index) {
         vm_area_free(allocated_vmas[range_index]);
@@ -2295,7 +2292,6 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 		data[i] = (void *)((unsigned long *)args.data)[i];
 	
 	// rebuild an array to store the ranges
-	/* TODO: should do the error checking on allocation? */
 	start = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
 	if (!start) {
         kfree(data);
