@@ -1583,6 +1583,7 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
 
 	/* TODO: add the following line may help multiple recoveries? */
 	// dst_vma->anon_vma = src_vma->anon_vma;
+	anon_vma_fork(dst_vma, src_vma);
 
 	raw_write_seqcount_end(&src_mm->write_protect_seq);
 	mmu_notifier_invalidate_range_end(&range);

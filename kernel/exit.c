@@ -783,6 +783,14 @@ void __noreturn do_exit(long code)
 	 * Then do everything else.
 	 */
 
+	// free data array, start array and end array
+	if (tsk->len != 0) {
+		kfree(tsk->phx_user_data);
+		kfree(tsk->phx_start);
+		kfree(tsk->phx_end);
+		printk("phx: free data array, start array and end array\n");
+    }
+	
 	WARN_ON(blk_needs_flush_plug(tsk));
 
 	if (unlikely(in_interrupt()))

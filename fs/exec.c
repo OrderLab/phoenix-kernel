@@ -335,14 +335,16 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 			GFP_KERNEL);
 	if (!allocated_vmas) {
         err = -ENOMEM;
-        printk("phx: fail to allocate allocated_vmas");
-        return err;
+	    printk("phx: fail to allocate allocated_vmas");
+        goto err_old_vmas;
     }
 	
 	/* currently do not consider running out of memory */
 	bprm->vma = vma = vm_area_alloc(mm);
-	if (!vma)
-		return -ENOMEM;
+	if (!vma) {
+	    err = -ENOMEM;
+        goto err_alloc_vmas;
+    }
 	vma_set_anonymous(vma);
 	allocated_vmas[allocated_vmas_len] = vma;
 	allocated_vmas_len++;
@@ -454,8 +456,9 @@ err_free:
 	for (range_index = 0; range_index < allocated_vmas_len; ++range_index) {
         vm_area_free(allocated_vmas[range_index]);
 	}
+err_alloc_vmas:
 	kfree(allocated_vmas);
-	
+err_old_vmas:
 	kfree(old_vmas);
 	printk("phx: fail to copy vmas");
 	return err;
@@ -2337,9 +2340,6 @@ SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
 		unsigned long __user **, start, unsigned long __user **, end, unsigned int __user *, len)
 {
 	int i;
-	// if (put_user(current->phx_user_data, data)) {
-	// 	return -EINVAL;
-    // }
 	for (i = 0; i < current->len; i++) {
 		printk("phx: ptr for data%d: %lx\n", i,
 		       ((unsigned long *)current->phx_user_data)[i]);
