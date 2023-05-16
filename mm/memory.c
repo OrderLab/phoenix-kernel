@@ -1346,6 +1346,9 @@ move_pte_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	/* struct page *prealloc = NULL; */
 	int i;
 
+	
+	printk("into move_pte_range");
+
 again:
 	progress = 0;
 	init_rss_vec(rss);
@@ -1409,6 +1412,7 @@ move_pmd_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	       pud_t *dst_pud, pud_t *src_pud, unsigned long addr,
 	       unsigned long end)
 {
+	printk("into move_pmd_range");
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
 	/* struct mm_struct *src_mm = src_vma->vm_mm; */
 	pmd_t *src_pmd, *dst_pmd;
@@ -1438,6 +1442,7 @@ move_pud_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	       p4d_t *dst_p4d, p4d_t *src_p4d, unsigned long addr,
 	       unsigned long end)
 {
+	printk("into move_pud_range");
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
 	/* struct mm_struct *src_mm = src_vma->vm_mm; */
 	pud_t *src_pud, *dst_pud;
@@ -1469,7 +1474,7 @@ move_p4d_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
 	p4d_t *src_p4d, *dst_p4d;
 	unsigned long next;
-
+    printk("into move_p4d_range");
 	dst_p4d = p4d_alloc(dst_mm, dst_pgd, addr);
 	if (!dst_p4d)
 		return -ENOMEM;
@@ -1502,21 +1507,33 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
         return -EINVAL;
 	}
 
+	// check if is in dst_vma
+	if (subrange_start < dst_vma->vm_start || subrange_end > dst_vma->vm_end) {
+        printk("subrange_start %lx, subrange_end %lx outside of dst_vma", subrange_start, subrange_end);
+        return -EINVAL;
+    }
+
 	addr = subrange_start;
 	end = subrange_end;
 
 	printk("move_page_range: addr %lx, end %lx", addr, end);
-	
+
 	/*
 	 * Don't copy ptes where a page fault will fill them correctly.
 	 * Fork becomes much lighter when there are big shared or private
 	 * readonly mappings. The tradeoff is that copy_page_range is more
 	 * efficient than faulting.
 	 */
+
+	
+    printk("src_vma->vm_flags %lx", src_vma->vm_flags);
+    printk("src_vma->anon_vma %lx", src_vma->anon_vma);
+    printk("src_vma->vm_ops %lx", src_vma->vm_ops);
+	
 	if (!(src_vma->vm_flags & (VM_HUGETLB | VM_PFNMAP | VM_MIXEDMAP)) &&
 	    !src_vma->anon_vma)
-		return 0;
-
+	    return 0;
+	
 	if (is_vm_hugetlb_page(src_vma))
 		return copy_hugetlb_page_range(dst_mm, src_mm, src_vma);
 
@@ -1549,6 +1566,7 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
 	mmap_assert_write_locked(src_mm);
 	raw_write_seqcount_begin(&src_mm->write_protect_seq);
 
+    printk("start move_p4d_range");
 	ret = 0;
 	dst_pgd = pgd_offset(dst_mm, addr);
 	src_pgd = pgd_offset(src_mm, addr);
@@ -1562,6 +1580,9 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
 			break;
 		}
 	} while (dst_pgd++, src_pgd++, addr = next, addr != end);
+
+	/* TODO: add the following line may help multiple recoveries? */
+	// dst_vma->anon_vma = src_vma->anon_vma;
 
 	raw_write_seqcount_end(&src_mm->write_protect_seq);
 	mmu_notifier_invalidate_range_end(&range);
