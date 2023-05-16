@@ -1201,7 +1201,7 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
                 return -EINVAL;
             }
 
-            ret = move_page_range(new_vma, old_vma);
+            ret = move_page_range(new_vma, old_vma, (phx->start)[range_index], (phx->end)[range_index]);
             printk("copy range ret %d", ret);
             mmap_read_unlock(old_mm);
             if (ret)

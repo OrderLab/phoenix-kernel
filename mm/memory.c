@@ -1486,7 +1486,7 @@ move_p4d_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 }
 
 int
-move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
+move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, const unsigned long subrange_start, const unsigned long subrange_end)
 {
 	pgd_t *src_pgd, *dst_pgd;
 	unsigned long next;
@@ -1497,6 +1497,16 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	struct mmu_notifier_range range;
 	int ret;
 
+	// first check if subrange is in src_vma
+	if (subrange_start < addr || subrange_end > end) {
+        return -EINVAL;
+	}
+
+	addr = subrange_start;
+	end = subrange_end;
+
+	printk("move_page_range: addr %lx, end %lx", addr, end);
+	
 	/*
 	 * Don't copy ptes where a page fault will fill them correctly.
 	 * Fork becomes much lighter when there are big shared or private
