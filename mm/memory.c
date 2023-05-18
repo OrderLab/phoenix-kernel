@@ -1325,8 +1325,9 @@ move_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		pte = pte_clear_uffd_wp(pte);
 
 	printk("Setting dst addr %lx with PTE %lx", addr, pte.pte);
-
+    
 	set_pte_at(dst_vma->vm_mm, addr, dst_pte, pte);
+	
 	pte_clear(src_vma->vm_mm, addr, src_pte);
 }
 
@@ -1347,7 +1348,6 @@ move_pte_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	int i;
 
 	
-	printk("into move_pte_range");
 
 again:
 	progress = 0;
@@ -1412,7 +1412,6 @@ move_pmd_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	       pud_t *dst_pud, pud_t *src_pud, unsigned long addr,
 	       unsigned long end)
 {
-	printk("into move_pmd_range");
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
 	/* struct mm_struct *src_mm = src_vma->vm_mm; */
 	pmd_t *src_pmd, *dst_pmd;
@@ -1442,7 +1441,6 @@ move_pud_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	       p4d_t *dst_p4d, p4d_t *src_p4d, unsigned long addr,
 	       unsigned long end)
 {
-	printk("into move_pud_range");
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
 	/* struct mm_struct *src_mm = src_vma->vm_mm; */
 	pud_t *src_pud, *dst_pud;
@@ -1474,7 +1472,6 @@ move_p4d_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
 	p4d_t *src_p4d, *dst_p4d;
 	unsigned long next;
-    printk("into move_p4d_range");
 	dst_p4d = p4d_alloc(dst_mm, dst_pgd, addr);
 	if (!dst_p4d)
 		return -ENOMEM;
@@ -1516,7 +1513,6 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
 	addr = subrange_start;
 	end = subrange_end;
 
-	printk("move_page_range: addr %lx, end %lx", addr, end);
 
 	/*
 	 * Don't copy ptes where a page fault will fill them correctly.
@@ -1526,10 +1522,7 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
 	 */
 
 	
-    printk("src_vma->vm_flags %lx", src_vma->vm_flags);
     printk("src_vma->anon_vma %lx", src_vma->anon_vma);
-    printk("src_vma->vm_ops %lx", src_vma->vm_ops);
-	
 	if (!(src_vma->vm_flags & (VM_HUGETLB | VM_PFNMAP | VM_MIXEDMAP)) &&
 	    !src_vma->anon_vma)
 	    return 0;
@@ -1566,7 +1559,6 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
 	mmap_assert_write_locked(src_mm);
 	raw_write_seqcount_begin(&src_mm->write_protect_seq);
 
-    printk("start move_p4d_range");
 	ret = 0;
 	dst_pgd = pgd_offset(dst_mm, addr);
 	src_pgd = pgd_offset(src_mm, addr);
@@ -1582,9 +1574,11 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
 	} while (dst_pgd++, src_pgd++, addr = next, addr != end);
 
 	/* TODO: add the following line may help multiple recoveries? */
-	// dst_vma->anon_vma = src_vma->anon_vma;
-	anon_vma_fork(dst_vma, src_vma);
-
+	if (anon_vma_fork(dst_vma, src_vma)) {
+		printk("anon_vma_fork failed, but why?");
+		ret = -ENOMEM;
+    }
+	
 	raw_write_seqcount_end(&src_mm->write_protect_seq);
 	mmu_notifier_invalidate_range_end(&range);
 	return ret;
@@ -4020,7 +4014,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	struct page *page;
 	vm_fault_t ret = 0;
 	pte_t entry;
-
+	
 	/* File mapping without ->vm_ops ? */
 	if (vma->vm_flags & VM_SHARED)
 		return VM_FAULT_SIGBUS;
@@ -4828,7 +4822,22 @@ split:
 static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
+	bool in_range = false;
+	unsigned long range_start, range_end;
+    int i;
 
+    if (vmf->address == 0x12345000) {
+		printk("phx: handle_pte_fault: vmf->address = 0x%lx\n",
+		       vmf->address);
+		printk("phx: flags: %d\n", vmf->flags);
+		printk("phx: vmf->pte = 0x%lx\n", vmf->pte);
+		printk("phx: vma flags: %d\n", vmf->vma->vm_flags);
+		printk("phx: vma pageprot: 0x%lx\n",
+		       vmf->vma->vm_page_prot.pgprot);
+		printk("phx: file: 0x%lx\n", vmf->vma->vm_file);
+		printk("phx: vmf->pmd: 0x%lx\n", vmf->pmd);
+    }
+	
 	if (unlikely(pmd_none(*vmf->pmd))) {
 		/*
 		 * Leave __pte_alloc() until later: because vm_ops->fault may
@@ -4876,6 +4885,18 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		}
 	}
 
+	if (vmf->address == 0x12345000) {
+		printk("after some operation!!!");
+		printk("phx: handle_pte_fault: vmf->address = 0x%lx\n",
+		       vmf->address);
+		printk("phx: flags: %d\n", vmf->flags);
+		printk("phx: vmf->pte = 0x%lx\n", vmf->pte);
+		printk("phx: vma flags: %d\n", vmf->vma->vm_flags);
+		printk("phx: vma pageprot: 0x%lx\n",
+		       vmf->vma->vm_page_prot.pgprot);
+		printk("phx: vm_ops: 0x%lx\n", vmf->vma->vm_ops);
+    }
+	
 	if (!vmf->pte) {
 		if (vma_is_anonymous(vmf->vma))
 			return do_anonymous_page(vmf);
@@ -4932,6 +4953,12 @@ unlock:
 static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 		unsigned long address, unsigned int flags)
 {
+	if (address == 0x12345000) {
+		printk("phx: __handle_mm_fault: address = 0x%lx\n", address);
+		printk("phx: flags: %lx\n", flags);
+		printk("phx: vma flags: %lx\n", vma->vm_flags);
+	}
+	
 	struct vm_fault vmf = {
 		.vma = vma,
 		.address = address & PAGE_MASK,
@@ -5089,6 +5116,10 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 			   unsigned int flags, struct pt_regs *regs)
 {
 	vm_fault_t ret;
+
+	if (address == 0x12345000) {
+		printk("phx: handle_mm_fault: address = 0x%lx\n", address);
+    }
 
 	__set_current_state(TASK_RUNNING);
 
