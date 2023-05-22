@@ -2336,11 +2336,13 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	return 0;
 }
 
-SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
-		unsigned long __user **, start, unsigned long __user **, end, unsigned int __user *, len)
+SYSCALL_DEFINE5(phx_get_preserved, void __user **, data,
+		unsigned long __user **, start, unsigned long __user **, end, unsigned int __user *, buf_len, unsigned int __user *, len)
 {
 	int i;
-	for (i = 0; i < current->len; i++) {
+	int copy_len = *buf_len > current->len ? current->len : *buf_len;
+	
+	for (i = 0; i < copy_len; i++) {
 		printk("phx: ptr for data%d: %lx\n", i,
 		       ((unsigned long *)current->phx_user_data)[i]);
 		printk("copy to %lx\n", &(((unsigned long *)(*data))[i]));
@@ -2357,7 +2359,11 @@ SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
     printk("phx: len: %lu\n", current->len);
 	if (put_user(current->len, len))
 		return -EINVAL;
-	
+
+	if (*buf_len < current->len) {
+        printk("phx: buf_len is too small\n");
+		return 1;
+    }
 	return 0;
 }
 
