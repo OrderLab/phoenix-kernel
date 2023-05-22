@@ -4822,21 +4822,6 @@ split:
 static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
 	pte_t entry;
-	bool in_range = false;
-	unsigned long range_start, range_end;
-    int i;
-
-    if (vmf->address == 0x12345000) {
-		printk("phx: handle_pte_fault: vmf->address = 0x%lx\n",
-		       vmf->address);
-		printk("phx: flags: %d\n", vmf->flags);
-		printk("phx: vmf->pte = 0x%lx\n", vmf->pte);
-		printk("phx: vma flags: %d\n", vmf->vma->vm_flags);
-		printk("phx: vma pageprot: 0x%lx\n",
-		       vmf->vma->vm_page_prot.pgprot);
-		printk("phx: file: 0x%lx\n", vmf->vma->vm_file);
-		printk("phx: vmf->pmd: 0x%lx\n", vmf->pmd);
-    }
 	
 	if (unlikely(pmd_none(*vmf->pmd))) {
 		/*
@@ -4884,18 +4869,6 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 			vmf->pte = NULL;
 		}
 	}
-
-	if (vmf->address == 0x12345000) {
-		printk("after some operation!!!");
-		printk("phx: handle_pte_fault: vmf->address = 0x%lx\n",
-		       vmf->address);
-		printk("phx: flags: %d\n", vmf->flags);
-		printk("phx: vmf->pte = 0x%lx\n", vmf->pte);
-		printk("phx: vma flags: %d\n", vmf->vma->vm_flags);
-		printk("phx: vma pageprot: 0x%lx\n",
-		       vmf->vma->vm_page_prot.pgprot);
-		printk("phx: vm_ops: 0x%lx\n", vmf->vma->vm_ops);
-    }
 	
 	if (!vmf->pte) {
 		if (vma_is_anonymous(vmf->vma))
@@ -4953,12 +4926,6 @@ unlock:
 static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 		unsigned long address, unsigned int flags)
 {
-	if (address == 0x12345000) {
-		printk("phx: __handle_mm_fault: address = 0x%lx\n", address);
-		printk("phx: flags: %lx\n", flags);
-		printk("phx: vma flags: %lx\n", vma->vm_flags);
-	}
-	
 	struct vm_fault vmf = {
 		.vma = vma,
 		.address = address & PAGE_MASK,
@@ -5116,10 +5083,6 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 			   unsigned int flags, struct pt_regs *regs)
 {
 	vm_fault_t ret;
-
-	if (address == 0x12345000) {
-		printk("phx: handle_mm_fault: address = 0x%lx\n", address);
-    }
 
 	__set_current_state(TASK_RUNNING);
 
