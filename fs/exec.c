@@ -308,12 +308,16 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	int err;
 	struct vm_area_struct *vma = NULL, *old_vma;
 	struct mm_struct *mm = bprm->mm;
-	unsigned int range_index;
-	unsigned long start_addr;
+	unsigned int range_index = 0;
+	unsigned long start_addr, end_addr, next_start_addr = 0, next_end_addr = 0;
 	pgprot_t vm_page_prot;
 	unsigned long vm_flags, vm_start, vm_end;
 	struct vm_area_struct **old_vmas, **allocated_vmas;
-    unsigned int old_vmas_len = 0, allocated_vmas_len = 0;
+	unsigned int old_vmas_len = 0, allocated_vmas_len = 0, old_vmas_cap = 0,
+		     allocated_vmas_cap = 0;
+	// this bool indicate whether the copying to last <start, end> is finished
+	// only happens when <start, end> spans in multiple VMAs
+	bool last_finish = true;
 
 	if (!bprm->phx_args)
 		return 0;
@@ -328,6 +332,7 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
         printk("phx: fail to allocate old_vmas");
         return err;
 	}
+	old_vmas_cap = bprm->phx_args->len;
 
 	// allocate an array to record the allocated vmas
 	allocated_vmas =
@@ -337,17 +342,9 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
         err = -ENOMEM;
 	    printk("phx: fail to allocate allocated_vmas");
         goto err_old_vmas;
-    }
+	}
+	allocated_vmas_cap = bprm->phx_args->len;
 	
-	/* currently do not consider running out of memory */
-	bprm->vma = vma = vm_area_alloc(mm);
-	if (!vma) {
-	    err = -ENOMEM;
-        goto err_alloc_vmas;
-    }
-	vma_set_anonymous(vma);
-	allocated_vmas[allocated_vmas_len] = vma;
-	allocated_vmas_len++;
 
 	/* Copy the vma flags */
 	if (mmap_read_lock_killable(current->mm)) {
@@ -359,29 +356,48 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	/* TODO: what if bprm <start,end> spans in multiple VMAs.
 	 * Currently only implement a possible solution for multiple VMAs */
 	printk("phx: start copying vmas");
-	for (range_index = 0; range_index < bprm->phx_args->len;
-	     ++range_index) {
-		printk("copy with index: %d", range_index);
+	range_index = 0;
+	// each loop copy one vma, each vma may contain multiple start and end addresses
+	// or multiple vmas contain one start and end address
+	while (range_index < bprm->phx_args->len) {
+		printk("copy with vma index: %d", range_index);
 
-		if (range_index != 0) {
-	        // allocate a new vma
-	        vma = vm_area_alloc(mm);
-            if (!vma) {
+        // allocate a new vma
+        vma = vm_area_alloc(mm);
+        if (!vma) {
+            mmap_read_unlock(current->mm);
+            err = -ENOMEM;
+            printk("phx: fail to allocate new vma");
+            goto err_free;
+        }
+        vma_set_anonymous(vma);
+	    allocated_vmas[allocated_vmas_len] = vma;
+	    // set bprm->vma if it is the first vma
+	    if (range_index == 0) 
+            bprm->vma = vma;
+	    allocated_vmas_len++;
+	    // if the allocated vmas array is full, double the size
+	    if (allocated_vmas_len == allocated_vmas_cap) {
+            allocated_vmas_cap *= 2;
+            allocated_vmas = krealloc(allocated_vmas, sizeof(struct vm_area_struct *) * allocated_vmas_cap, GFP_KERNEL);
+            if (!allocated_vmas) {
                 mmap_read_unlock(current->mm);
                 err = -ENOMEM;
-                printk("phx: fail to allocate new vma");
+                printk("phx: fail to reallocate allocated vmas");
                 goto err_free;
-	        }
-		    vma_set_anonymous(vma);
-		    allocated_vmas[allocated_vmas_len] = vma;
-		    allocated_vmas_len++;
+            }
         }
 
-		if (bprm->phx_args->len == 0) {
-            start_addr = 0;
-		} else {
-            start_addr =
-                ((unsigned long *)(bprm->phx_args->start))[range_index];
+
+	    if (last_finish) {
+		    start_addr =
+			    ((unsigned long *)(bprm->phx_args
+						       ->start))[range_index];
+		    end_addr = ((
+			    unsigned long *)(bprm->phx_args->end))[range_index];
+	    } else {
+		    start_addr = next_start_addr;
+		    end_addr = next_end_addr;
         }
 	    old_vma = find_vma(current->mm, start_addr);
         if (!old_vma) {
@@ -390,6 +406,17 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
             printk("phx: fail to find old vma");
             goto err_free;
 	    }
+	    // if end_addr is not in the vma
+	    if (end_addr > old_vma->vm_end) {
+            printk("phx: end_addr is not in the vma");
+	        next_start_addr = old_vma->vm_end;
+		    next_end_addr = end_addr;
+            last_finish = false;
+	    } else {
+            // can proceed to the next range
+	        last_finish = true;
+            range_index++;
+        }
 
 	    // if already has the vma, skip
 	    if (has_vma(old_vmas, old_vma, old_vmas_len)) {
@@ -404,6 +431,17 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	    // insert the old vma into the array
 	    old_vmas[old_vmas_len] = old_vma;
 	    old_vmas_len++;
+	    // if the old vmas array is full, double the size
+	    if (old_vmas_len == old_vmas_cap) {
+            old_vmas_cap *= 2;
+            old_vmas = krealloc(old_vmas, sizeof(struct vm_area_struct *) * old_vmas_cap, GFP_KERNEL);
+            if (!old_vmas) {
+                mmap_read_unlock(current->mm);
+                err = -ENOMEM;
+                printk("phx: fail to reallocate old vmas");
+                goto err_free;
+            }
+        }
 	    
 	    printk("phx: start_addr: %lx with old_vma: %lx\n", start_addr,
 		   old_vma);
@@ -456,7 +494,6 @@ err_free:
 	for (range_index = 0; range_index < allocated_vmas_len; ++range_index) {
         vm_area_free(allocated_vmas[range_index]);
 	}
-err_alloc_vmas:
 	kfree(allocated_vmas);
 err_old_vmas:
 	kfree(old_vmas);
@@ -1160,7 +1197,9 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
 	struct task_struct *tsk;
 	struct mm_struct *old_mm, *active_mm;
 	int ret;
-    unsigned long start_addr;
+	unsigned long start_addr, end_addr, new_start_addr = 0, new_end_addr = 0;
+	// this bool indicates if we need to move another vma for single <start, end> pair
+	bool last_finish = true;
 
 	/* Notify parent that we're no longer interested in the old VM */
 	tsk = current;
@@ -1171,13 +1210,20 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
 
 	if (phx) {
 		int range_index = 0;
-
-
 		printk("exec phx mode with phx len: %ld", phx->len);
-		for (range_index = 0; range_index < (int)phx->len; ++range_index) {
+        range_index = 0;
+		while (range_index < (int)phx->len) {
 			struct vm_area_struct *old_vma, *new_vma;
 
-            start_addr = (phx->start)[range_index];
+			if (last_finish) {
+				printk("phx: moving page range for new vma");
+				start_addr = (phx->start)[range_index];
+				end_addr = (phx->end)[range_index];
+			} else {
+				printk("phx: moving page range for old vma");
+                start_addr = new_start_addr;
+                end_addr = new_end_addr;
+            }
 			printk("looking for vma for start_addr: %lx",
 				start_addr);
             new_vma = find_vma(mm,start_addr);
@@ -1186,8 +1232,20 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
                 printk("new_vma start %lx end %lx",
                         new_vma->vm_start, new_vma->vm_end);
             }
-            if (!new_vma)
+            if (!new_vma) {
                 return -EINVAL;
+            }
+	        // check if end_addr is in the same vma
+	        if (end_addr <= new_vma->vm_end) {
+		        last_finish = true;
+                range_index++;
+		    } else {
+		        last_finish = false;
+                new_start_addr = new_vma->vm_end;
+		        new_end_addr = end_addr;
+                end_addr = new_vma->vm_end;
+		    }
+
 
             ret = mmap_read_lock_killable(old_mm);
             if (ret)
@@ -1203,8 +1261,12 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
                 mmap_read_unlock(old_mm);
                 return -EINVAL;
             }
-
-            ret = move_page_range(new_vma, old_vma, (phx->start)[range_index], (phx->end)[range_index]);
+	        if (end_addr > old_vma->vm_end) {
+                printk("impossible!!!");
+                mmap_read_unlock(old_mm);
+                return -EINVAL;
+            }
+            ret = move_page_range(new_vma, old_vma, start_addr, end_addr);
             printk("copy range ret %d", ret);
             mmap_read_unlock(old_mm);
             if (ret)
