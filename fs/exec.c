@@ -2398,34 +2398,33 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	return 0;
 }
 
-SYSCALL_DEFINE5(phx_get_preserved, void __user **, data,
-		unsigned long __user **, start, unsigned long __user **, end, unsigned int __user *, buf_len, unsigned int __user *, len)
+/* We currently only handle up to 64 ranges
+ */
+SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
+		unsigned long __user **, start, unsigned long __user **, end, unsigned int __user *, len)
 {
 	int i;
-	int copy_len = *buf_len > current->len ? current->len : *buf_len;
-	
-	for (i = 0; i < copy_len; i++) {
-		printk("phx: ptr for data%d: %lx\n", i,
-		       ((unsigned long *)current->phx_user_data)[i]);
-		printk("copy to %lx\n", &(((unsigned long *)(*data))[i]));
-        if (put_user(((unsigned long *)current->phx_user_data)[i], &(((unsigned long *)(*data))[i])))
-            return -EINVAL;
-		printk("phx: start: %lx\n", current->phx_start[i]);
-		printk("copy to %lx\n", &(((unsigned long *)(*start))[i]));
-        if (put_user((current->phx_start[i]), &(((unsigned long *)(*start))[i])))
-			return -EINVAL;
-        printk("phx: end: %lx\n", current->phx_end[i]);
-        if (put_user((current->phx_end[i]), &(((unsigned long *)(*end))[i]))) 
-            return -EINVAL;
+    static const int PHX_RANGE_LIMIT = 64;
+    int copy_len = PHX_RANGE_LIMIT < current->len ? PHX_RANGE_LIMIT : current->len;
+
+    for (i = 0; i < copy_len; i++) {
+    printk("phx: ptr for data%d: %lx\n", i,
+            ((unsigned long *)current->phx_user_data)[i]);
+    printk("copy to %lx\n", &(((unsigned long *)(*data))[i]));
+    if (put_user(((unsigned long *)current->phx_user_data)[i], &(((unsigned long *)(*data))[i])))
+        return -EINVAL;
+    printk("phx: start: %lx\n", current->phx_start[i]);
+    printk("copy to %lx\n", &(((unsigned long *)(*start))[i]));
+    if (put_user((current->phx_start[i]), &(((unsigned long *)(*start))[i])))
+        return -EINVAL;
+    printk("phx: end: %lx\n", current->phx_end[i]);
+    if (put_user((current->phx_end[i]), &(((unsigned long *)(*end))[i]))) 
+        return -EINVAL;
     }
     printk("phx: len: %lu\n", current->len);
-	if (put_user(current->len, len))
+	if (put_user(copy_len, len))
 		return -EINVAL;
 
-	if (*buf_len < current->len) {
-        printk("phx: buf_len is too small\n");
-		return 1;
-    }
 	return 0;
 }
 
