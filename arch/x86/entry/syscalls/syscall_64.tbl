@@ -374,6 +374,8 @@
 # Phoenix syscalls
 449	common	phx_restart		sys_phx_restart
 450	common	phx_get_preserved	sys_phx_get_preserved
+451 common  phx_preserve_meta   sys_phx_preserve_meta
+452 common  phx_get_meta    sys_phx_get_meta
 
 #
 # Due to a historical design error, certain syscalls are numbered differently

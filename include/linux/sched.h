@@ -970,6 +970,8 @@ struct task_struct {
 	unsigned long*			phx_start;
 	unsigned long*			phx_end;
     unsigned int            len;
+	void __user *			phx_user_meta;
+	unsigned int            meta_len;
 	
 	/*
 	 * 'ptraced' is the list of tasks this task is using ptrace() on.

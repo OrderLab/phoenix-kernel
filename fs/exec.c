@@ -2428,6 +2428,49 @@ SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
 	return 0;
 }
 
+SYSCALL_DEFINE2(phx_preserve_meta, void __user **, data, const unsigned int __user *, len)
+{
+	void *meta;
+
+	meta = kmalloc(sizeof(unsigned long) * len, GFP_KERNEL);
+	if (!meta) {
+		return -ENOMEM;
+    }
+	
+	for (i = 0; i < len; i++)
+		meta[i] = data[i];
+
+	current->phx_user_meta = meta;
+	current->meta_len = len;
+
+	printk("current phx: user_meta: %lx\n", current->phx_user_meta);
+
+	return 0;
+}
+
+SYSCALL_DEFINE2(phx_get_meta, void __user **, data, unsigned int __user *, len)
+{
+	int copy_len = PHX_RANGE_LIMIT < current->meta_len ? PHX_RANGE_LIMIT : current->meta_len;
+	if(*len < current->meta_len)
+		return -EINVAL;
+	
+	for (int i = 0; i < copy_len; i++) {
+	printk("phx: ptr for data%d: %lx\n", i,
+            ((unsigned long *)current->phx_user_meta)[i]);
+    printk("copy to %lx\n", &(((unsigned long *)(*data))[i]));
+	if (put_user(((unsigned long *)current->phx_user_meta)[i], &(((unsigned long *)(*data))[i])))
+        return -EINVAL;
+	}
+	printk("phx: len: %lu\n", current->meta_len);
+	if (put_user(copy_len, len))
+		return -EINVAL;
+		
+	kfree(current->phx_user_meta);
+	current->phx_user_meta = NULL;
+	current->meta_len = 0;
+	return 0;
+}
+
 static int do_execveat(int fd, struct filename *filename,
 		const char __user *const __user *__argv,
 		const char __user *const __user *__envp,
