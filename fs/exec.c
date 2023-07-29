@@ -2471,7 +2471,10 @@ SYSCALL_DEFINE2(phx_get_meta, void __user *, data, unsigned int __user *, len)
 	kfree(current->phx_user_meta);
 	current->phx_user_meta = NULL;
 	current->meta_len = 0;
-	return 0;
+	if (copy_len > 0)
+		return 0;
+	else
+		return -EINVAL;
 }
 
 static int do_execveat(int fd, struct filename *filename,
