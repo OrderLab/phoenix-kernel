@@ -2428,9 +2428,9 @@ SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
 	return 0;
 }
 
-SYSCALL_DEFINE2(phx_preserve_meta, void __user **, data, unsigned int __user *, len)
+SYSCALL_DEFINE2(phx_preserve_meta, void __user *, data, unsigned int __user *, len)
 {
-	void **meta;
+	void *meta;
 	int i;
 
 	meta = kmalloc(sizeof(unsigned long) * (*len), GFP_KERNEL);
@@ -2438,8 +2438,9 @@ SYSCALL_DEFINE2(phx_preserve_meta, void __user **, data, unsigned int __user *, 
 		return -ENOMEM;
     }
 	
-	for (i = 0; i < *len; i++)
-		meta[i] = ((unsigned long *)(*data))[i];
+	// for (i = 0; i < *len; i++)
+	// 	meta[i] = ((unsigned long *)data)[i];
+	memcpy(meta, data, *len);
 
 	current->phx_user_meta = meta;
 	current->meta_len = *len;
