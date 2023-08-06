@@ -938,6 +938,8 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->phx_start = 0;
 	tsk->phx_end = 0;
 	tsk->len = 0;
+	tsk->phx_user_meta = NULL;
+	tsk->meta_len = 0;
 
 #ifdef CONFIG_STACKPROTECTOR
 	tsk->stack_canary = get_random_canary();

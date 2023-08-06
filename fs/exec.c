@@ -2330,6 +2330,7 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	int ret, i;
 	unsigned long *start, *end;
 	void **data;
+	printk(KERN_EMERG, "access !!\n");
 
 	if (copy_from_user(&args, user_args, sizeof(args)))
 		return -EINVAL;
@@ -2440,11 +2441,15 @@ SYSCALL_DEFINE2(phx_preserve_meta, void __user *, data, unsigned int __user *, l
 	
 	// for (i = 0; i < *len; i++)
 	// 	meta[i] = ((unsigned long *)data)[i];
-	memcpy(meta, data, *len);
+	memcpy(meta, data, (*len)*sizeof (unsigned long));
 
 	current->phx_user_meta = meta;
 	current->meta_len = *len;
-
+	
+	for (i = 0; i < *len; i++) {
+	  printk("preserved meta i = %d, with meta = %lx\n", i, ((unsigned long *)data)[i]);
+	}
+	printk("!!!len = %lx\n", *len);
 	printk("current phx: user_meta: %lx\n", current->phx_user_meta);
 
 	return 0;
@@ -2452,9 +2457,10 @@ SYSCALL_DEFINE2(phx_preserve_meta, void __user *, data, unsigned int __user *, l
 
 SYSCALL_DEFINE2(phx_get_meta, void __user *, data, unsigned int __user *, len)
 {
-	static const int PHX_RANGE_LIMIT = 64;
+	//static const int PHX_RANGE_LIMIT = 64;
 	int i;
-	int copy_len = PHX_RANGE_LIMIT < current->meta_len ? PHX_RANGE_LIMIT : current->meta_len;
+	//int copy_len = PHX_RANGE_LIMIT < current->meta_len ? PHX_RANGE_LIMIT : current->meta_len;
+	int copy_len = current->meta_len;
 	if(*len < current->meta_len)
 		return -EINVAL;
 	
@@ -2465,13 +2471,15 @@ SYSCALL_DEFINE2(phx_get_meta, void __user *, data, unsigned int __user *, len)
 	if (put_user(((unsigned long *)current->phx_user_meta)[i], &(((unsigned long *)data)[i])))
         return -EINVAL;
 	}
-	printk("phx: len: %lu\n", current->meta_len);
+	printk("phx: len: %x\n", current->meta_len);
 	if (put_user(copy_len, len))
 		return -EINVAL;
-		
+	printk("1\n");	
 	kfree(current->phx_user_meta);
+	printk("2\n");
 	current->phx_user_meta = NULL;
 	current->meta_len = 0;
+	printk("3\n");
 	if (copy_len > 0)
 		return 0;
 	else
