@@ -1328,6 +1328,7 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
 		return 0;
 	}
 	mmdrop(active_mm);
+	printk("end exec mmap\n");
 	return 0;
 }
 
@@ -2377,12 +2378,14 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	args.start = start;
 	args.end = end;
 	ret = do_execveat_common(AT_FDCWD, getname(args.filename), argv, envp, 0, &args);
+	printk("before \n");
 	if (ret) {
 		kfree(data);
 		kfree(start);
 		kfree(end);
 		return ret;
     }
+	printk("after \n");
 		
 
 	

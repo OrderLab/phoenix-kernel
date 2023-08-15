@@ -3095,6 +3095,7 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 out:
 	perf_event_mmap(vma);
 	mm->total_vm += len >> PAGE_SHIFT;
+	//printk("cur mm->data_tm = %lu, len>>shift = %lu\n", mm->data_vm, len >> PAGE_SHIFT);
 	mm->data_vm += len >> PAGE_SHIFT;
 	if (flags & VM_LOCKED)
 		mm->locked_vm += (len >> PAGE_SHIFT);
@@ -3328,10 +3329,11 @@ bool may_expand_vm(struct mm_struct *mm, vm_flags_t flags, unsigned long npages)
 	if (is_data_mapping(flags) &&
 	    mm->data_vm + npages > rlimit(RLIMIT_DATA) >> PAGE_SHIFT) {
 		/* Workaround for Valgrind */
+		//printk("mm->data_vm + npages = %lu, rlimit >> shift = %lu\n", mm->data_vm + npages, rlimit(RLIMIT_DATA) >> PAGE_SHIFT);
 		if (rlimit(RLIMIT_DATA) == 0 &&
 		    mm->data_vm + npages <= rlimit_max(RLIMIT_DATA) >> PAGE_SHIFT)
 			return true;
-
+		//printk("(mm->data_vm + npages) << PAGE_SHIFT = %lu, rlimit = %lu\n", (mm->data_vm + npages) << PAGE_SHIFT, rlimit(RLIMIT_DATA));
 		pr_warn_once("%s (%d): VmData %lu exceed data ulimit %lu. Update limits%s.\n",
 			     current->comm, current->pid,
 			     (mm->data_vm + npages) << PAGE_SHIFT,
@@ -3353,8 +3355,10 @@ void vm_stat_account(struct mm_struct *mm, vm_flags_t flags, long npages)
 		mm->exec_vm += npages;
 	else if (is_stack_mapping(flags))
 		mm->stack_vm += npages;
-	else if (is_data_mapping(flags))
+	else if (is_data_mapping(flags)) {
 		mm->data_vm += npages;
+		//printk("current mm data->vm = %lu, npages =  %lu\n", mm->data_vm, npages);
+	}
 }
 
 static vm_fault_t special_mapping_fault(struct vm_fault *vmf);
