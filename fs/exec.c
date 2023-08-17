@@ -2330,7 +2330,6 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	struct user_arg_ptr argv = {}, envp = {};
 	int ret, i;
 	unsigned long *start, *end;
-	void **data;
 	printk(KERN_EMERG, "access !!\n");
 
 	if (copy_from_user(&args, user_args, sizeof(args)))
@@ -2350,25 +2349,17 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	for (i = 0; i < args.len; i++)
 		printk("%lx ", args.end[i]);
 	printk("\n");
-	// rebuild an array to store the data pointers
-	data = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
-	if (!data) {
-		return -ENOMEM;
-    }
-	for (i = 0; i < args.len; i++)
-		data[i] = (void *)((unsigned long *)args.data)[i];
+	
 	
 	// rebuild an array to store the ranges
 	start = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
 	if (!start) {
-        kfree(data);
         return -ENOMEM;
     }
 	for (i = 0; i < args.len; i++)
 		start[i] = args.start[i];
 	end = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
 	if (!end) {
-        kfree(data);
         kfree(start);
         return -ENOMEM;
     }
@@ -2380,16 +2371,14 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	ret = do_execveat_common(AT_FDCWD, getname(args.filename), argv, envp, 0, &args);
 	printk("before \n");
 	if (ret) {
-		kfree(data);
+		printk("exec failed, ready to kfree...\n");
 		kfree(start);
 		kfree(end);
 		return ret;
     }
 	printk("after \n");
-		
-
 	
-	current->phx_user_data = data;
+	current->phx_user_data = args.data;
 	current->phx_start = start;
 	current->phx_end = end;
 	current->len = args.len;
@@ -2411,12 +2400,9 @@ SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
     static const int PHX_RANGE_LIMIT = 64;
     int copy_len = PHX_RANGE_LIMIT < current->len ? PHX_RANGE_LIMIT : current->len;
 
-    for (i = 0; i < copy_len; i++) {
-    printk("phx: ptr for data%d: %lx\n", i,
-            ((unsigned long *)current->phx_user_data)[i]);
-    printk("copy to %lx\n", &(((unsigned long *)(*data))[i]));
-    if (put_user(((unsigned long *)current->phx_user_data)[i], &(((unsigned long *)(*data))[i])))
+    if (put_user(current->phx_user_data, data))
         return -EINVAL;
+    for (i = 0; i < copy_len; i++) {
     printk("phx: start: %lx\n", current->phx_start[i]);
     printk("copy to %lx\n", &(((unsigned long *)(*start))[i]));
     if (put_user((current->phx_start[i]), &(((unsigned long *)(*start))[i])))
