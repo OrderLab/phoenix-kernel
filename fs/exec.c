@@ -470,10 +470,12 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	       vma->vm_end, vma->vm_flags);
 	    
         err = insert_vm_struct(mm, vma);
+		
         if (err){
             printk("phx: fail to insert vm struct");
 	        goto err;
         }
+		vm_stat_account(mm, vma->vm_flags, vma_pages(vma));
 	
 	    mmap_write_unlock(mm);
 
