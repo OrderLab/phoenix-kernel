@@ -785,10 +785,9 @@ void __noreturn do_exit(long code)
 
 	// free data array, start array and end array
 	if (tsk->len != 0) {
-		kfree(tsk->phx_user_data);
 		kfree(tsk->phx_start);
 		kfree(tsk->phx_end);
-		printk("phx: free data array, start array and end array\n");
+		printk("phx: free start array and end array\n");
     }
 	if(tsk->meta_len != 0) {
 		kfree(tsk->phx_user_meta);
