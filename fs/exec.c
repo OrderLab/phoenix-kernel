@@ -451,7 +451,6 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
         vm_start = old_vma->vm_start;
         vm_end = old_vma->vm_end;
 
-        mmap_read_unlock(current->mm);
 
         if (mmap_write_lock_killable(mm)) {
             err = -EINTR;
@@ -481,6 +480,7 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 
 	}
 
+	mmap_read_unlock(current->mm);
 
 	printk("phx: finish copying vmas");
 	// free the old vmas and allocated vmas
