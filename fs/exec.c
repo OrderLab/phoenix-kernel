@@ -419,14 +419,14 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
         }
 
 	    // if already has the vma, skip
-	    if (has_vma(old_vmas, old_vma, old_vmas_len)) {
+	    /* if (has_vma(old_vmas, old_vma, old_vmas_len)) {
             printk("phx: already has the vma");
             mmap_read_unlock(current->mm);
 
             // free the vma
             vm_area_free(vma);
             continue;
-	    }
+	    } */
 
 	    // insert the old vma into the array
 	    old_vmas[old_vmas_len] = old_vma;
@@ -448,9 +448,10 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
         vm_page_prot = old_vma->vm_page_prot;
         vm_flags = old_vma->vm_flags;
         /* Create a same sized VMA instead of only the data range */
-        vm_start = old_vma->vm_start;
-        vm_end = old_vma->vm_end;
-
+        // vm_start = old_vma->vm_start;
+        // vm_end = old_vma->vm_end;
+		vm_start = start_addr;
+		vm_end = end_addr > old_vma->vm_end ? old_vma->vm_end : end_addr;
 
         if (mmap_write_lock_killable(mm)) {
             err = -EINTR;
@@ -2373,7 +2374,7 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	ret = do_execveat_common(AT_FDCWD, getname(args.filename), argv, envp, 0, &args);
 	printk("before \n");
 	if (ret) {
-		printk("exec failed, ready to kfree...\n");
+		printk("exec failed ret=%d, ready to kfree...\n", ret);
 		kfree(start);
 		kfree(end);
 		return ret;
@@ -2417,6 +2418,21 @@ SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
 	if (put_user(copy_len, len))
 		return -EINVAL;
 
+	return 0;
+}
+
+SYSCALL_DEFINE1(phx_preserve_lmap, void __user *, map)
+{
+	printk("phx: lmap %lx -> %lx", (unsigned long)current->lmap_ptr, (unsigned long)map);
+	current->lmap_ptr = map;
+	return 0;
+}
+
+SYSCALL_DEFINE1(phx_get_lmap, void __user **, map)
+{
+	printk("phx: lmap retrieved %lx", (unsigned long)current->lmap_ptr);
+	if (put_user((void*)current->lmap_ptr, map))
+		return -EINVAL;
 	return 0;
 }
 

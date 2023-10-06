@@ -114,6 +114,7 @@ struct task_struct init_task
     .len        = 0,
     .phx_user_meta = NULL,
     .meta_len = 0,
+    .lmap_ptr = NULL,
 	.group_leader	= &init_task,
 	RCU_POINTER_INITIALIZER(real_cred, &init_cred),
 	RCU_POINTER_INITIALIZER(cred, &init_cred),

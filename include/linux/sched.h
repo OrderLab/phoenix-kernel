@@ -966,12 +966,14 @@ struct task_struct {
 	struct list_head		sibling;
 	struct task_struct		*group_leader;
 
+	// TODO (maybe): group into one struct?
 	void __user *			phx_user_data;
 	unsigned long*			phx_start;
 	unsigned long*			phx_end;
     unsigned int            len;
 	void __user *			phx_user_meta;
 	unsigned int            meta_len;
+	void __user*			lmap_ptr;
 	
 	/*
 	 * 'ptraced' is the list of tasks this task is using ptrace() on.

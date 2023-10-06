@@ -97,6 +97,10 @@ static int elf_core_dump(struct coredump_params *cprm);
 #define ELF_PAGEOFFSET(_v) ((_v) & (ELF_MIN_ALIGN-1))
 #define ELF_PAGEALIGN(_v) (((_v) + ELF_MIN_ALIGN - 1) & ~(ELF_MIN_ALIGN - 1))
 
+// Phoenix debug print
+#define phxdprint(...) do {} while(0)
+/* #define phxdprint(fmt, ...) do { printk(fmt, ##__VA_ARGS__); } while(0) */
+
 static struct linux_binfmt elf_format = {
 	.module		= THIS_MODULE,
 	.load_binary	= load_elf_binary,
@@ -107,7 +111,7 @@ static struct linux_binfmt elf_format = {
 
 #define BAD_ADDR(x) (unlikely((unsigned long)(x) >= TASK_SIZE))
 
-static int set_brk(unsigned long start, unsigned long end, int prot)
+static int set_brk_plain(unsigned long start, unsigned long end, int prot)
 {
 	start = ELF_PAGEALIGN(start);
 	end = ELF_PAGEALIGN(end);
@@ -124,6 +128,55 @@ static int set_brk(unsigned long start, unsigned long end, int prot)
 	}
 	current->mm->start_brk = current->mm->brk = end;
 	return 0;
+}
+
+static int set_brk_phx(unsigned long start, unsigned long end, int prot)
+{
+	struct vm_area_struct *prev;
+	unsigned long next_start;
+
+	int error;
+
+	start = ELF_PAGEALIGN(start);
+	end = ELF_PAGEALIGN(end);
+
+	while (start < end) {
+		prev = find_vma(current->mm, start);
+		if (!prev) {
+			phxdprint("phx: brk in no vma branch");
+			error = vm_brk_flags(start, end - start,
+					prot & PROT_EXEC ? VM_EXEC : 0);
+			if (error)
+				return error;
+		}
+		phxdprint("phx: brk [%lx, %lx] found vma [%lx, %lx]", start, end,
+				prev->vm_start, prev->vm_end);
+		if (start < prev->vm_start) {
+			phxdprint("branch 1");
+			next_start = end < prev->vm_start ? end : prev->vm_start;
+
+			error = vm_brk_flags(start, next_start - start,
+					prot & PROT_EXEC ? VM_EXEC : 0);
+			if (error)
+				return error;
+
+			if (next_start == prev->vm_start)
+				next_start = prev->vm_end;
+			start = next_start;
+			phxdprint("branch 1, update start %lx -> %lx", start, next_start);
+		} else {
+			phxdprint("branch 2, update start %lx -> %lx", start, prev->vm_end);
+			start = prev->vm_end;
+		}
+	}
+
+	current->mm->start_brk = current->mm->brk = end;
+	return 0;
+}
+
+static int set_brk(unsigned long start, unsigned long end, int prot, bool phx)
+{
+	return (phx ? set_brk_phx : set_brk_plain)(start, end, prot);
 }
 
 /* We need to explicitly zero any fractional pages
@@ -362,7 +415,7 @@ create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 
 static unsigned long elf_map(struct file *filep, unsigned long addr,
 		const struct elf_phdr *eppnt, int prot, int type,
-		unsigned long total_size)
+		unsigned long total_size, struct kernel_phx_args_multi *phx)
 {
 	unsigned long map_addr;
 	unsigned long size = eppnt->p_filesz + ELF_PAGEOFFSET(eppnt->p_vaddr);
@@ -383,7 +436,69 @@ static unsigned long elf_map(struct file *filep, unsigned long addr,
 	* So we first map the 'big' image - and unmap the remainder at
 	* the end. (which unmap is needed for ELF images with holes.)
 	*/
-	if (total_size) {
+	if (phx) {
+		unsigned long cmd_addr = addr;
+		unsigned long cmd_end = cmd_addr + size;
+		unsigned long i;
+		typedef unsigned long d;
+
+		struct phx_range {
+			unsigned long start, length;
+		} *subranges = kmalloc((phx->len + 1) * sizeof(*subranges), GFP_KERNEL);
+		unsigned long subrange_cnt = 0;
+
+		if (phx->len > 64)
+			panic("phx range larger than 64");
+
+		for (i = 0; i < phx->len; ++i) {
+			unsigned long skip_start = phx->start[i];
+			unsigned long skip_end = phx->end[i];
+
+			phxdprint("skip start = %lx, end=%lx\n", (d)skip_start, (d)skip_end);
+
+			/* Skip skip_range with no intersection */
+			if (!(cmd_addr < skip_end && skip_start < cmd_end)) {
+				phxdprint("skip range do not intersect with cmd range\n");
+				continue;
+			}
+			phxdprint("skip range has intersection with cmd range\n");
+			/* The intersection start is within the cmd range, then there is a
+			 * chunk of splitted range that still need to be loaded. */
+			if (cmd_addr <= skip_start) {
+				subranges[subrange_cnt++] =
+					(struct phx_range) { cmd_addr, skip_start - cmd_addr };
+				phxdprint("add cut range %lx size %lx\n",
+					(d)subranges[subrange_cnt-1].start, (d)subranges[subrange_cnt-1].length);
+			}
+			/* Eat the skipped part from the cmd range */
+			cmd_addr = skip_end;
+			phxdprint("update cmd_addr to %lx\n", (d)cmd_addr);
+		}
+		/* Add the remaining chunk if exists */
+		if (cmd_addr < cmd_end) {
+			subranges[subrange_cnt++] =
+				(struct phx_range) { cmd_addr, cmd_end - cmd_addr };
+			phxdprint("add last range %lx size %lx\n",
+				(d)subranges[subrange_cnt-1].start,
+				(d)subranges[subrange_cnt-1].length);
+		}
+
+		if (subrange_cnt == 0) {
+			pr_err("exe's subrange after skip is empty?");
+			return -EINVAL;
+		}
+
+		map_addr = vm_mmap(filep, subranges[0].start, subranges[0].length,
+				prot, type | MAP_FIXED_NOREPLACE, off);
+		for (i = 1; i < subrange_cnt; ++i) {
+			// TODO: also check those returns?
+			vm_mmap(filep, subranges[i].start, subranges[i].length,
+					prot, type | MAP_FIXED_NOREPLACE, off);
+		}
+
+		kfree(subranges);
+
+	} else if (total_size) {
 		total_size = ELF_PAGEALIGN(total_size);
 		map_addr = vm_mmap(filep, addr, total_size, prot, type, off);
 		if (!BAD_ADDR(map_addr))
@@ -635,7 +750,7 @@ static unsigned long load_elf_interp(struct elfhdr *interp_elf_ex,
 				load_addr = -vaddr;
 
 			map_addr = elf_map(interpreter, load_addr + vaddr,
-					eppnt, elf_prot, elf_type, total_size);
+					eppnt, elf_prot, elf_type, total_size, NULL);
 			total_size = 0;
 			error = map_addr;
 			if (BAD_ADDR(map_addr))
@@ -1048,7 +1163,7 @@ out_free_interp:
 			   and clear the area.  */
 			retval = set_brk(elf_bss + load_bias,
 					 elf_brk + load_bias,
-					 bss_prot);
+					 bss_prot, !!bprm->phx_args);
 			if (retval)
 				goto out_free_dentry;
 			nbyte = ELF_PAGEOFFSET(elf_bss);
@@ -1139,7 +1254,7 @@ out_free_interp:
 		}
 
 		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-				elf_prot, elf_flags, total_size);
+				elf_prot, elf_flags, total_size, bprm->phx_args);
 		if (BAD_ADDR(error)) {
 			retval = IS_ERR((void *)error) ?
 				PTR_ERR((void*)error) : -EINVAL;
@@ -1215,7 +1330,7 @@ out_free_interp:
 	 * mapping in the interpreter, to make sure it doesn't wind
 	 * up getting placed where the bss needs to go.
 	 */
-	retval = set_brk(elf_bss, elf_brk, bss_prot);
+	retval = set_brk(elf_bss, elf_brk, bss_prot, !!bprm->phx_args);
 	if (retval)
 		goto out_free_dentry;
 	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -1291,6 +1406,7 @@ out_free_interp:
 			mm->brk = mm->start_brk = ELF_ET_DYN_BASE;
 		}
 
+		// TODO: phx to add fixed-address logic under randomization?
 		mm->brk = mm->start_brk = arch_randomize_brk(mm);
 #ifdef compat_brk_randomized
 		current->brk_randomized = 1;
