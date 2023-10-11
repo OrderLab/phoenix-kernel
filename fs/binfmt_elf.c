@@ -1338,6 +1338,11 @@ out_free_interp:
 		goto out_free_dentry;
 	}
 
+	/* Fix up brk for phx scenario
+	 * FIXME: use actual end address of the brk range in the preserved ranges */
+	if (bprm->phx_args)
+		current->mm->brk = bprm->old_brk;
+
 	if (interpreter) {
 		elf_entry = load_elf_interp(interp_elf_ex,
 					    interpreter,

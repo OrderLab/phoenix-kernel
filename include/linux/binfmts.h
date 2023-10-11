@@ -64,6 +64,7 @@ struct linux_binprm {
 	struct rlimit rlim_stack; /* Saved RLIMIT_STACK used during exec. */
 
 	struct kernel_phx_args_multi *phx_args;
+	unsigned long old_brk; /* Restored brk location, only for PHX use */
 
 	char buf[BINPRM_BUF_SIZE];
 } __randomize_layout;

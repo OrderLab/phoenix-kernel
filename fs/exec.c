@@ -1195,10 +1195,11 @@ EXPORT_SYMBOL(read_code);
  * On success, this function returns with exec_update_lock
  * held for writing.
  */
-static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
+static int exec_mmap(struct mm_struct *mm, struct linux_binprm *bprm)
 {
 	struct task_struct *tsk;
 	struct mm_struct *old_mm, *active_mm;
+	struct kernel_phx_args_multi *phx = bprm->phx_args; /* Shorthand */
 	int ret;
 	unsigned long start_addr, end_addr, new_start_addr = 0, new_end_addr = 0;
 	// this bool indicates if we need to move another vma for single <start, end> pair
@@ -1299,6 +1300,9 @@ static int exec_mmap(struct mm_struct *mm, struct kernel_phx_args_multi *phx)
 			return -EINTR;
 		}
 	}
+	/* PHX: save old brk for heap preservation. FIXME */
+	if (phx)
+		bprm->old_brk = old_mm->brk;
 
 	task_lock(tsk);
 	membarrier_exec_mmap(mm);
@@ -1595,7 +1599,7 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 * Release all of the old mmap stuff
 	 */
 	acct_arg_size(bprm, 0);
-	retval = exec_mmap(bprm->mm, bprm->phx_args);
+	retval = exec_mmap(bprm->mm, bprm);
 	if (retval)
 		goto out;
 
