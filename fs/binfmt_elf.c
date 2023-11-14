@@ -98,8 +98,11 @@ static int elf_core_dump(struct coredump_params *cprm);
 #define ELF_PAGEALIGN(_v) (((_v) + ELF_MIN_ALIGN - 1) & ~(ELF_MIN_ALIGN - 1))
 
 // Phoenix debug print
+#if 1
 #define phxdprint(...) do {} while(0)
-/* #define phxdprint(fmt, ...) do { printk(fmt, ##__VA_ARGS__); } while(0) */
+#else
+#define phxdprint(fmt, ...) do { printk(fmt, ##__VA_ARGS__); } while(0)
+#endif
 
 static struct linux_binfmt elf_format = {
 	.module		= THIS_MODULE,

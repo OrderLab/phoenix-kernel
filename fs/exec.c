@@ -76,6 +76,12 @@
 
 #include <trace/events/sched.h>
 
+#if 1
+  #define phxprint(fmt, ...) do { } while (0)
+#else
+  #define phxprint(fmt, ...) do { printk("phx: " fmt, ##__VA_ARGS__); } while (0)
+#endif
+
 static int bprm_creds_from_file(struct linux_binprm *bprm);
 
 int suid_dumpable = 0;
@@ -295,10 +301,10 @@ static bool has_vma(struct vm_area_struct **copied_vmas, struct vm_area_struct *
 	int i;
 	bool has_vma = false;
 	for (i = 0; i < len; ++i) {
-        if (copied_vmas[i] == target_vma_ptr) {
-            has_vma = true;
-            break;
-        }
+		if (copied_vmas[i] == target_vma_ptr) {
+			has_vma = true;
+			break;
+		}
 	}
 	return has_vma;
 }
@@ -322,185 +328,183 @@ static int __bprm_phx_mm_init(struct linux_binprm *bprm)
 	if (!bprm->phx_args)
 		return 0;
 
-
 	// allocate an array of length bprm->phx_args->len, to store the old_vmas
 	old_vmas =
 		kmalloc(sizeof(struct vm_area_struct *) * bprm->phx_args->len,
-			GFP_KERNEL);
+				GFP_KERNEL);
 	if (!old_vmas) {
 		err = -ENOMEM;
-        printk("phx: fail to allocate old_vmas");
-        return err;
+		phxprint("fail to allocate old_vmas");
+		return err;
 	}
 	old_vmas_cap = bprm->phx_args->len;
 
 	// allocate an array to record the allocated vmas
 	allocated_vmas =
 		kmalloc(sizeof(struct vm_area_struct *) * bprm->phx_args->len,
-			GFP_KERNEL);
+				GFP_KERNEL);
 	if (!allocated_vmas) {
-        err = -ENOMEM;
-	    printk("phx: fail to allocate allocated_vmas");
-        goto err_old_vmas;
+		err = -ENOMEM;
+		phxprint("fail to allocate allocated_vmas");
+		goto err_old_vmas;
 	}
 	allocated_vmas_cap = bprm->phx_args->len;
-	
+
 
 	/* Copy the vma flags */
 	if (mmap_read_lock_killable(current->mm)) {
 		err = -EINTR;
-		printk("phx: fail to get old vm flags");
+		phxprint("fail to get old vm flags");
 		goto err_free;
 	}
 
 	/* TODO: what if bprm <start,end> spans in multiple VMAs.
 	 * Currently only implement a possible solution for multiple VMAs */
-	printk("phx: start copying vmas");
+	phxprint("start copying vmas");
 	range_index = 0;
 	// each loop copy one vma, each vma may contain multiple start and end addresses
 	// or multiple vmas contain one start and end address
 	while (range_index < bprm->phx_args->len) {
-		printk("copy with vma index: %d", range_index);
+		phxprint("copy with vma index: %d", range_index);
 
-        // allocate a new vma
-        vma = vm_area_alloc(mm);
-        if (!vma) {
-            mmap_read_unlock(current->mm);
-            err = -ENOMEM;
-            printk("phx: fail to allocate new vma");
-            goto err_free;
-        }
-        vma_set_anonymous(vma);
-	    allocated_vmas[allocated_vmas_len] = vma;
-	    // set bprm->vma if it is the first vma
-	    if (range_index == 0) 
-            bprm->vma = vma;
-	    allocated_vmas_len++;
-	    // if the allocated vmas array is full, double the size
-	    if (allocated_vmas_len == allocated_vmas_cap) {
-            allocated_vmas_cap *= 2;
-            allocated_vmas = krealloc(allocated_vmas, sizeof(struct vm_area_struct *) * allocated_vmas_cap, GFP_KERNEL);
-            if (!allocated_vmas) {
-                mmap_read_unlock(current->mm);
-                err = -ENOMEM;
-                printk("phx: fail to reallocate allocated vmas");
-                goto err_free;
-            }
-        }
+		// allocate a new vma
+		vma = vm_area_alloc(mm);
+		if (!vma) {
+			mmap_read_unlock(current->mm);
+			err = -ENOMEM;
+			phxprint("fail to allocate new vma");
+			goto err_free;
+		}
+		vma_set_anonymous(vma);
+		allocated_vmas[allocated_vmas_len] = vma;
+		// set bprm->vma if it is the first vma
+		if (range_index == 0)
+			bprm->vma = vma;
+		allocated_vmas_len++;
+		// if the allocated vmas array is full, double the size
+		if (allocated_vmas_len == allocated_vmas_cap) {
+			allocated_vmas_cap *= 2;
+			allocated_vmas = krealloc(allocated_vmas, sizeof(struct vm_area_struct *) * allocated_vmas_cap, GFP_KERNEL);
+			if (!allocated_vmas) {
+				mmap_read_unlock(current->mm);
+				err = -ENOMEM;
+				phxprint("fail to reallocate allocated vmas");
+				goto err_free;
+			}
+		}
 
 
-	    if (last_finish) {
-		    start_addr =
-			    ((unsigned long *)(bprm->phx_args
-						       ->start))[range_index];
-		    end_addr = ((
-			    unsigned long *)(bprm->phx_args->end))[range_index];
-	    } else {
-		    start_addr = next_start_addr;
-		    end_addr = next_end_addr;
-        }
-	    old_vma = find_vma(current->mm, start_addr);
-        if (!old_vma) {
-            mmap_read_unlock(current->mm);
-            err = -EINVAL;
-            printk("phx: fail to find old vma");
-            goto err_free;
-	    }
-	    // if end_addr is not in the vma
-	    if (end_addr > old_vma->vm_end) {
-            printk("phx: end_addr is not in the vma");
-	        next_start_addr = old_vma->vm_end;
-		    next_end_addr = end_addr;
-            last_finish = false;
-	    } else {
-            // can proceed to the next range
-	        last_finish = true;
-            range_index++;
-        }
+		if (last_finish) {
+			start_addr = ((unsigned long *)(bprm->phx_args->start))[range_index];
+			end_addr = ((unsigned long *)(bprm->phx_args->end))[range_index];
+		} else {
+			start_addr = next_start_addr;
+			end_addr = next_end_addr;
+		}
+		old_vma = find_vma(current->mm, start_addr);
+		phxprint("finding old vma fitting start_addr %lx end_addr %lx\n",
+				start_addr, end_addr);
+		if (!old_vma) {
+			mmap_read_unlock(current->mm);
+			err = -EINVAL;
+			phxprint("fail to find old vma");
+			goto err_free;
+		}
+		phxprint("found old_vma start %lx end %lx\n",
+				old_vma->vm_start, old_vma->vm_end);
+		// if end_addr is not in the vma
+		if (end_addr > old_vma->vm_end) {
+			phxprint("end_addr is not in the vma");
+			next_start_addr = old_vma->vm_end;
+			next_end_addr = end_addr;
+			last_finish = false;
+		} else {
+			// can proceed to the next range
+			last_finish = true;
+			range_index++;
+		}
 
-	    // if already has the vma, skip
-	    /* if (has_vma(old_vmas, old_vma, old_vmas_len)) {
-            printk("phx: already has the vma");
-            mmap_read_unlock(current->mm);
+		// if already has the vma, skip
+		/* if (has_vma(old_vmas, old_vma, old_vmas_len)) {
+		   phxprint("already has the vma");
+		   mmap_read_unlock(current->mm);
 
-            // free the vma
-            vm_area_free(vma);
-            continue;
-	    } */
+		// free the vma
+		vm_area_free(vma);
+		continue;
+		} */
 
-	    // insert the old vma into the array
-	    old_vmas[old_vmas_len] = old_vma;
-	    old_vmas_len++;
-	    // if the old vmas array is full, double the size
-	    if (old_vmas_len == old_vmas_cap) {
-            old_vmas_cap *= 2;
-            old_vmas = krealloc(old_vmas, sizeof(struct vm_area_struct *) * old_vmas_cap, GFP_KERNEL);
-            if (!old_vmas) {
-                mmap_read_unlock(current->mm);
-                err = -ENOMEM;
-                printk("phx: fail to reallocate old vmas");
-                goto err_free;
-            }
-        }
-	    
-	    printk("phx: start_addr: %lx with old_vma: %lx\n", start_addr,
-		   old_vma);
-        vm_page_prot = old_vma->vm_page_prot;
-        vm_flags = old_vma->vm_flags;
-        /* Create a same sized VMA instead of only the data range */
-        // vm_start = old_vma->vm_start;
-        // vm_end = old_vma->vm_end;
+		// insert the old vma into the array
+		old_vmas[old_vmas_len] = old_vma;
+		old_vmas_len++;
+		// if the old vmas array is full, double the size
+		if (old_vmas_len == old_vmas_cap) {
+			old_vmas_cap *= 2;
+			old_vmas = krealloc(old_vmas, sizeof(struct vm_area_struct *) * old_vmas_cap, GFP_KERNEL);
+			if (!old_vmas) {
+				mmap_read_unlock(current->mm);
+				err = -ENOMEM;
+				phxprint("fail to reallocate old vmas");
+				goto err_free;
+			}
+		}
+
+		vm_page_prot = old_vma->vm_page_prot;
+		vm_flags = old_vma->vm_flags;
+		/* Create a same sized VMA instead of only the data range */
+		// vm_start = old_vma->vm_start;
+		// vm_end = old_vma->vm_end;
 		vm_start = start_addr;
 		vm_end = end_addr > old_vma->vm_end ? old_vma->vm_end : end_addr;
 
-        if (mmap_write_lock_killable(mm)) {
-            err = -EINTR;
-            goto err_free;
-        }
+		if (mmap_write_lock_killable(mm)) {
+			err = -EINTR;
+			goto err_free;
+		}
 
-        /* Put a placeholder vma
-        * Potentially multiple vmas in the future */
-        vma->vm_start = vm_start;
-        vma->vm_end = vm_end;
-        vma->vm_page_prot = vm_page_prot;
-        vma->vm_flags = vm_flags;
+		/* Put a placeholder vma
+		 * Potentially multiple vmas in the future */
+		vma->vm_start = vm_start;
+		vma->vm_end = vm_end;
+		vma->vm_page_prot = vm_page_prot;
+		vma->vm_flags = vm_flags;
 
 
-	    printk("phx: vma start: %lx, end: %lx, flags: %lx\n", vma->vm_start,
-	       vma->vm_end, vma->vm_flags);
-	    
-        err = insert_vm_struct(mm, vma);
-		
-        if (err){
-            printk("phx: fail to insert vm struct");
-	        goto err;
-        }
+		phxprint("new vma start: %lx, end: %lx, flags: %lx\n", vma->vm_start,
+				vma->vm_end, vma->vm_flags);
+
+		err = insert_vm_struct(mm, vma);
+
+		if (err){
+			phxprint("fail to insert vm struct");
+			goto err;
+		}
 		vm_stat_account(mm, vma->vm_flags, vma_pages(vma));
-	
-	    mmap_write_unlock(mm);
+
+		mmap_write_unlock(mm);
 
 	}
 
 	mmap_read_unlock(current->mm);
 
-	printk("phx: finish copying vmas");
+	phxprint("finish copying vmas");
 	// free the old vmas and allocated vmas
 	kfree(old_vmas);
 	kfree(allocated_vmas);
-    return 0;
+	return 0;
 err:
 	mmap_write_unlock(mm);
 err_free:
 	bprm->vma = NULL;
-	
+
 	// free the allocated vmas
 	for (range_index = 0; range_index < allocated_vmas_len; ++range_index) {
-        vm_area_free(allocated_vmas[range_index]);
+		vm_area_free(allocated_vmas[range_index]);
 	}
 	kfree(allocated_vmas);
 err_old_vmas:
 	kfree(old_vmas);
-	printk("phx: fail to copy vmas");
+	phxprint("fail to copy vmas");
 	return err;
 }
 
@@ -1214,72 +1218,74 @@ static int exec_mmap(struct mm_struct *mm, struct linux_binprm *bprm)
 
 	if (phx) {
 		int range_index = 0;
-		printk("exec phx mode with phx len: %ld", phx->len);
-        range_index = 0;
+		phxprint("exec phx mode with phx len: %ld", phx->len);
+		range_index = 0;
 		while (range_index < (int)phx->len) {
 			struct vm_area_struct *old_vma, *new_vma;
 
 			if (last_finish) {
-				printk("phx: moving page range for new vma");
+				phxprint("moving page range for new vma");
 				start_addr = (phx->start)[range_index];
 				end_addr = (phx->end)[range_index];
 			} else {
-				printk("phx: moving page range for old vma");
-                start_addr = new_start_addr;
-                end_addr = new_end_addr;
-            }
-			printk("looking for vma for start_addr: %lx",
-				start_addr);
-            new_vma = find_vma(mm,start_addr);
-            printk("new_vma %lx", (unsigned long)new_vma);
-            if (new_vma) {
-                printk("new_vma start %lx end %lx",
-                        new_vma->vm_start, new_vma->vm_end);
-            }
-            if (!new_vma) {
-                return -EINVAL;
-            }
-	        // check if end_addr is in the same vma
-	        if (end_addr <= new_vma->vm_end) {
-		        last_finish = true;
-                range_index++;
-		    } else {
-		        last_finish = false;
-                new_start_addr = new_vma->vm_end;
-		        new_end_addr = end_addr;
-                end_addr = new_vma->vm_end;
-		    }
+				phxprint("moving page range for old vma");
+				start_addr = new_start_addr;
+				end_addr = new_end_addr;
+			}
+			phxprint("looking for vma for start_addr: %lx",
+					start_addr);
+			new_vma = find_vma(mm,start_addr);
+			phxprint("new_vma %lx", (unsigned long)new_vma);
+			if (new_vma) {
+				phxprint("new_vma start %lx end %lx",
+						new_vma->vm_start, new_vma->vm_end);
+			}
+			if (!new_vma) {
+				return -EINVAL;
+			}
+			// check if end_addr is in the same vma
+			if (end_addr <= new_vma->vm_end) {
+				last_finish = true;
+				range_index++;
+			} else {
+				last_finish = false;
+				new_start_addr = new_vma->vm_end;
+				new_end_addr = end_addr;
+				end_addr = new_vma->vm_end;
+			}
 
 
-            ret = mmap_read_lock_killable(old_mm);
-            if (ret)
-                return ret;
+			ret = mmap_read_lock_killable(old_mm);
+			if (ret)
+				return ret;
 
-            old_vma = find_vma(old_mm, start_addr);
-            printk("old_vma %lx", (unsigned long)old_vma);
-            if (old_vma) {
-                printk("old_vma start %lx end %lx",
-                        old_vma->vm_start, old_vma->vm_end);
-            }
-            if (!old_vma) {
-                mmap_read_unlock(old_mm);
-                return -EINVAL;
-            }
-	        if (end_addr > old_vma->vm_end) {
-                printk("impossible!!!");
-                mmap_read_unlock(old_mm);
-                return -EINVAL;
-            }
-            ret = move_page_range(new_vma, old_vma, start_addr, end_addr);
-            printk("copy range ret %d", ret);
-            mmap_read_unlock(old_mm);
-            if (ret)
-                return ret;
+			old_vma = find_vma(old_mm, start_addr);
+			phxprint("old_vma %lx", (unsigned long)old_vma);
+			if (old_vma) {
+				phxprint("old_vma start %lx end %lx",
+						old_vma->vm_start, old_vma->vm_end);
+			}
+			if (!old_vma) {
+				mmap_read_unlock(old_mm);
+				return -EINVAL;
+			}
+			if (end_addr > old_vma->vm_end) {
+				phxprint("impossible!!!");
+				mmap_read_unlock(old_mm);
+				return -EINVAL;
+			}
+			ret = move_page_range(new_vma, old_vma, start_addr, end_addr);
+			phxprint("copy range start_addr = %lx, end_addr = %lx",
+					start_addr, end_addr);
+			phxprint("copy range ret %d", ret);
+			mmap_read_unlock(old_mm);
+			if (ret)
+				return ret;
 
-            flush_tlb_mm(mm);
-	        flush_tlb_mm(old_mm);
-        }
-	    printk("finish moving page range for phx");
+			flush_tlb_mm(mm);
+			flush_tlb_mm(old_mm);
+		}
+		phxprint("finish moving page range for phx");
 	}
 
 	ret = down_write_killable(&tsk->signal->exec_update_lock);
@@ -1335,7 +1341,7 @@ static int exec_mmap(struct mm_struct *mm, struct linux_binprm *bprm)
 		return 0;
 	}
 	mmdrop(active_mm);
-	printk("end exec mmap\n");
+	phxprint("end exec mmap\n");
 	return 0;
 }
 
@@ -2337,7 +2343,7 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	struct user_arg_ptr argv = {}, envp = {};
 	int ret, i;
 	unsigned long *start, *end;
-	printk(KERN_EMERG, "access !!\n");
+	phxprint(KERN_EMERG, "access !!\n");
 
 	if (copy_from_user(&args, user_args, sizeof(args)))
 		return -EINVAL;
@@ -2345,19 +2351,18 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	argv.ptr.native = args.argv;
 	envp.ptr.native = args.envp;
 
-	printk("phx: len: %lu\n", args.len);
-	printk("phx: start args: %lx\n", args.start);
-	printk("phx: end args: %lx\n", args.end);
-	printk("phx real start addresses: ");
+	phxprint("len: %lu\n", args.len);
+	phxprint("start args: %lx\n", args.start);
+	phxprint("end args: %lx\n", args.end);
+	phxprint("phx real start addresses: ");
 	for (i = 0; i < args.len; i++)
-		printk("%lx ", args.start[i]);
-	printk("\n");
-	printk("phx real end addresses: ");
+		phxprint("%lx ", args.start[i]);
+	phxprint("\n");
+	phxprint("phx real end addresses: ");
 	for (i = 0; i < args.len; i++)
-		printk("%lx ", args.end[i]);
-	printk("\n");
-	
-	
+		phxprint("%lx ", args.end[i]);
+	phxprint("\n");
+
 	// rebuild an array to store the ranges
 	start = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
 	if (!start) {
@@ -2376,25 +2381,25 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	args.start = start;
 	args.end = end;
 	ret = do_execveat_common(AT_FDCWD, getname(args.filename), argv, envp, 0, &args);
-	printk("before \n");
+	phxprint("before \n");
 	if (ret) {
-		printk("exec failed ret=%d, ready to kfree...\n", ret);
+		phxprint("exec failed ret=%d, ready to kfree...\n", ret);
 		kfree(start);
 		kfree(end);
 		return ret;
     }
-	printk("after \n");
-	
+	phxprint("after \n");
+
 	current->phx_user_data = args.data;
 	current->phx_start = start;
 	current->phx_end = end;
 	current->len = args.len;
 
-	printk("current phx: user_data: %lx\n", current->phx_user_data);
-	printk("current phx: start: %lx\n", current->phx_start);
-	printk("current phx: end: %lx\n", current->phx_end);
-	printk("current phx: len: %lu\n", current->len);
-	
+	phxprint("current: user_data: %lx\n", current->phx_user_data);
+	phxprint("current: start: %lx\n", current->phx_start);
+	phxprint("current: end: %lx\n", current->phx_end);
+	phxprint("current: len: %lu\n", current->len);
+
 	return 0;
 }
 
@@ -2404,21 +2409,21 @@ SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
 		unsigned long __user **, start, unsigned long __user **, end, unsigned int __user *, len)
 {
 	int i;
-    static const int PHX_RANGE_LIMIT = 64;
-    int copy_len = PHX_RANGE_LIMIT < current->len ? PHX_RANGE_LIMIT : current->len;
+	static const int PHX_RANGE_LIMIT = 64;
+	int copy_len = PHX_RANGE_LIMIT < current->len ? PHX_RANGE_LIMIT : current->len;
 
-    if (put_user(current->phx_user_data, data))
-        return -EINVAL;
-    for (i = 0; i < copy_len; i++) {
-    printk("phx: start: %lx\n", current->phx_start[i]);
-    printk("copy to %lx\n", &(((unsigned long *)(*start))[i]));
-    if (put_user((current->phx_start[i]), &(((unsigned long *)(*start))[i])))
-        return -EINVAL;
-    printk("phx: end: %lx\n", current->phx_end[i]);
-    if (put_user((current->phx_end[i]), &(((unsigned long *)(*end))[i]))) 
-        return -EINVAL;
-    }
-    printk("phx: len: %lu\n", current->len);
+	if (put_user(current->phx_user_data, data))
+		return -EINVAL;
+	for (i = 0; i < copy_len; i++) {
+		phxprint("start: %lx\n", current->phx_start[i]);
+		phxprint("copy to %lx\n", &(((unsigned long *)(*start))[i]));
+		if (put_user((current->phx_start[i]), &(((unsigned long *)(*start))[i])))
+			return -EINVAL;
+		phxprint("end: %lx\n", current->phx_end[i]);
+		if (put_user((current->phx_end[i]), &(((unsigned long *)(*end))[i])))
+			return -EINVAL;
+	}
+	phxprint("len: %lu\n", current->len);
 	if (put_user(copy_len, len))
 		return -EINVAL;
 
@@ -2427,14 +2432,14 @@ SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
 
 SYSCALL_DEFINE1(phx_preserve_lmap, void __user *, map)
 {
-	printk("phx: lmap %lx -> %lx", (unsigned long)current->lmap_ptr, (unsigned long)map);
+	phxprint("lmap %lx -> %lx", (unsigned long)current->lmap_ptr, (unsigned long)map);
 	current->lmap_ptr = map;
 	return 0;
 }
 
 SYSCALL_DEFINE1(phx_get_lmap, void __user **, map)
 {
-	printk("phx: lmap retrieved %lx", (unsigned long)current->lmap_ptr);
+	phxprint("lmap retrieved %lx", (unsigned long)current->lmap_ptr);
 	if (put_user((void*)current->lmap_ptr, map))
 		return -EINVAL;
 	return 0;
@@ -2448,20 +2453,20 @@ SYSCALL_DEFINE2(phx_preserve_meta, void __user *, data, unsigned int __user *, l
 	meta = kmalloc(sizeof(unsigned long) * (*len), GFP_KERNEL);
 	if (!meta) {
 		return -ENOMEM;
-    }
-	
+	}
+
 	// for (i = 0; i < *len; i++)
 	// 	meta[i] = ((unsigned long *)data)[i];
 	memcpy(meta, data, (*len)*sizeof (unsigned long));
 
 	current->phx_user_meta = meta;
 	current->meta_len = *len;
-	
+
 	for (i = 0; i < *len; i++) {
-	  printk("preserved meta i = %d, with meta = %lx\n", i, ((unsigned long *)data)[i]);
+		phxprint("preserved meta i = %d, with meta = %lx\n", i, ((unsigned long *)data)[i]);
 	}
-	printk("!!!len = %lx\n", *len);
-	printk("current phx: user_meta: %lx\n", current->phx_user_meta);
+	phxprint("!!!len = %lx\n", *len);
+	phxprint("current: user_meta: %lx\n", current->phx_user_meta);
 
 	return 0;
 }
@@ -2474,23 +2479,23 @@ SYSCALL_DEFINE2(phx_get_meta, void __user *, data, unsigned int __user *, len)
 	int copy_len = current->meta_len;
 	if(*len < current->meta_len)
 		return -EINVAL;
-	
+
 	for (i = 0; i < copy_len; i++) {
-	printk("phx: ptr for data%d: %lx\n", i,
-            ((unsigned long *)current->phx_user_meta)[i]);
-    printk("copy to %lx\n", &(((unsigned long *)data)[i]));
-	if (put_user(((unsigned long *)current->phx_user_meta)[i], &(((unsigned long *)data)[i])))
-        return -EINVAL;
+		phxprint("ptr for data %d: %lx\n", i,
+				((unsigned long *)current->phx_user_meta)[i]);
+		phxprint("copy to %lx\n", &(((unsigned long *)data)[i]));
+		if (put_user(((unsigned long *)current->phx_user_meta)[i], &(((unsigned long *)data)[i])))
+			return -EINVAL;
 	}
-	printk("phx: len: %x\n", current->meta_len);
+	phxprint("len: %x\n", current->meta_len);
 	if (put_user(copy_len, len))
 		return -EINVAL;
-	printk("1\n");	
+	phxprint("1\n");
 	kfree(current->phx_user_meta);
-	printk("2\n");
+	phxprint("2\n");
 	current->phx_user_meta = NULL;
 	current->meta_len = 0;
-	printk("3\n");
+	phxprint("3\n");
 	if (copy_len > 0)
 		return 0;
 	else

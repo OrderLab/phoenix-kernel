@@ -1324,8 +1324,8 @@ move_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	if (!userfaultfd_wp(dst_vma))
 		pte = pte_clear_uffd_wp(pte);
 
-	printk("Setting dst addr %lx with PTE %lx", addr, pte.pte);
-    
+	// printk("Setting dst addr %lx with PTE %lx", addr, pte.pte);
+
 	set_pte_at(dst_vma->vm_mm, addr, dst_pte, pte);
 	
 	pte_clear(src_vma->vm_mm, addr, src_pte);
@@ -1506,9 +1506,10 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
 
 	// check if is in dst_vma
 	if (subrange_start < dst_vma->vm_start || subrange_end > dst_vma->vm_end) {
-        printk("subrange_start %lx, subrange_end %lx outside of dst_vma", subrange_start, subrange_end);
-        return -EINVAL;
-    }
+		printk("phx: invalid subrange: subrange_start %lx, "
+				"subrange_end %lx outside of dst_vma", subrange_start, subrange_end);
+		return -EINVAL;
+	}
 
 	addr = subrange_start;
 	end = subrange_end;
@@ -1522,7 +1523,7 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
 	 */
 
 	
-    printk("src_vma->anon_vma %lx", src_vma->anon_vma);
+	// printk("src_vma->anon_vma %lx", (unsigned long)src_vma->anon_vma);
 	if (!(src_vma->vm_flags & (VM_HUGETLB | VM_PFNMAP | VM_MIXEDMAP)) &&
 	    !src_vma->anon_vma)
 	    return 0;
@@ -1577,8 +1578,8 @@ move_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma, 
 	if (anon_vma_fork(dst_vma, src_vma)) {
 		printk("anon_vma_fork failed, but why?");
 		ret = -ENOMEM;
-    }
-	
+	}
+
 	raw_write_seqcount_end(&src_mm->write_protect_seq);
 	mmu_notifier_invalidate_range_end(&range);
 	return ret;
