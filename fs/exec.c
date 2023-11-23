@@ -2023,6 +2023,33 @@ out:
 }
 EXPORT_SYMBOL(remove_arg_zero);
 
+static u64 duration = 0;
+static int phx_mode = 0;
+static int cnt = 0;
+static struct ckpt_t {
+        u64 t;
+        const char *name;
+} ckpts[32] = { { 0, NULL, }, };
+
+//enum { COUNTER_BASE = cnt };
+
+#define CKPT 1
+
+#define ckpt(s) \
+        if(CKPT && phx_mode) { \
+                if (cnt == 0) { \
+                        ckpts[0] = (struct ckpt_t) { \
+                                .t = ktime_get_ns(), \
+                                .name = s, \
+                        }; \
+                } else { \
+                        ckpts[cnt].t = ktime_get_ns() - ckpts[0].t; \
+                        ckpts[cnt].name = s; \
+                } \
+                cnt++; \
+        } 
+
+
 #define printable(c) (((c)=='\t') || ((c)=='\n') || (0x20<=(c) && (c)<=0x7e))
 /*
  * cycle the list of binary formats handler, until one recognizes the image
@@ -2055,6 +2082,7 @@ static int search_binary_handler(struct linux_binprm *bprm)
 		put_binfmt(fmt);
 		if (bprm->point_of_no_return || (retval != -ENOEXEC)) {
 			read_unlock(&binfmt_lock);
+			ckpt("Binary loaded");
 			return retval;
 		}
 	}
@@ -2266,6 +2294,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 	}
 
 	retval = bprm_execve(bprm, fd, filename, flags);
+
 out_free:
 	free_bprm(bprm);
 
@@ -2344,6 +2373,8 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	struct user_arg_ptr argv = {}, envp = {};
 	int ret, i;
 	unsigned long *start, *end;
+	phx_mode = 1;
+	ckpt("Entering phx_restart");
 	phxprint(KERN_EMERG, "access !!\n");
 
 	if (copy_from_user(&args, user_args, sizeof(args)))
@@ -2401,6 +2432,19 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	phxprint("current: end: %lx\n", current->phx_end);
 	phxprint("current: len: %lu\n", current->len);
 
+	ckpt("End of syscall");
+	if (CKPT && phx_mode) {
+		int total = cnt;
+
+		ckpts[0].t = 0;
+		size_t i;
+		for (i = 1; i < total; ++i) {
+			duration += (ckpts[i].t - ckpts[i - 1].t);
+		}
+		phx_mode = 0;
+		cnt = 0;
+	}
+
 	return 0;
 }
 
@@ -2444,6 +2488,13 @@ SYSCALL_DEFINE1(phx_get_lmap, void __user **, map)
 	if (put_user((void*)current->lmap_ptr, map))
 		return -EINVAL;
 	return 0;
+}
+
+SYSCALL_DEFINE0(phx_get_duration)
+{
+	uint64_t ret = duration;
+	duration = 0;
+	return ret;
 }
 
 SYSCALL_DEFINE2(phx_preserve_meta, void __user *, data, unsigned int __user *, len)

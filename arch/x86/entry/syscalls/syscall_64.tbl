@@ -378,6 +378,7 @@
 452 common  phx_get_meta    sys_phx_get_meta
 453	common	phx_preserve_lmap	sys_phx_preserve_lmap
 454	common	phx_get_lmap		sys_phx_get_lmap
+455 common  phx_get_duration    sys_phx_get_duration
 
 #
 # Due to a historical design error, certain syscalls are numbered differently
