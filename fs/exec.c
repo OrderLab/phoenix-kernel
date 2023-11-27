@@ -2355,29 +2355,29 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 	phxprint("len: %lu\n", args.len);
 	phxprint("start args: %lx\n", args.start);
 	phxprint("end args: %lx\n", args.end);
-	phxprint("phx real start addresses: ");
-	for (i = 0; i < args.len; i++)
-		phxprint("%lx ", args.start[i]);
-	phxprint("\n");
-	phxprint("phx real end addresses: ");
-	for (i = 0; i < args.len; i++)
-		phxprint("%lx ", args.end[i]);
-	phxprint("\n");
 
 	// rebuild an array to store the ranges
 	start = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
 	if (!start) {
-        return -ENOMEM;
-    }
-	for (i = 0; i < args.len; i++)
-		start[i] = args.start[i];
+		return -ENOMEM;
+	}
+	copy_from_user(start, args.start, args.len * sizeof(unsigned long));
+
 	end = kmalloc(sizeof(unsigned long) * args.len, GFP_KERNEL);
 	if (!end) {
-        kfree(start);
-        return -ENOMEM;
-    }
+		kfree(start);
+		return -ENOMEM;
+	}
+	copy_from_user(end, args.end, args.len * sizeof(unsigned long));
+
+	phxprint("phx real start addresses: ");
 	for (i = 0; i < args.len; i++)
-		end[i] = args.end[i];
+		phxprint("%lx ", start[i]);
+	phxprint("\n");
+	phxprint("phx real end addresses: ");
+	for (i = 0; i < args.len; i++)
+		phxprint("%lx ", end[i]);
+	phxprint("\n");
 
 	args.start = start;
 	args.end = end;
@@ -2388,7 +2388,7 @@ SYSCALL_DEFINE1(phx_restart, struct kernel_phx_args_multi __user *, user_args)
 		kfree(start);
 		kfree(end);
 		return ret;
-    }
+	}
 	phxprint("after \n");
 
 	current->phx_user_data = args.data;
@@ -2412,18 +2412,18 @@ SYSCALL_DEFINE4(phx_get_preserved, void __user **, data,
 	int i;
 	static const int PHX_RANGE_LIMIT = 64;
 	int copy_len = PHX_RANGE_LIMIT < current->len ? PHX_RANGE_LIMIT : current->len;
+	unsigned long __user *start_hack, __user *end_hack;
 
 	if (put_user(current->phx_user_data, data))
 		return -EINVAL;
-	for (i = 0; i < copy_len; i++) {
-		phxprint("start: %lx\n", current->phx_start[i]);
-		phxprint("copy to %lx\n", &(((unsigned long *)(*start))[i]));
-		if (put_user((current->phx_start[i]), &(((unsigned long *)(*start))[i])))
-			return -EINVAL;
-		phxprint("end: %lx\n", current->phx_end[i]);
-		if (put_user((current->phx_end[i]), &(((unsigned long *)(*end))[i])))
-			return -EINVAL;
+
+	if (get_user(start_hack, start) || get_user(end_hack, end)) {
+		return -EINVAL;
 	}
+
+	copy_to_user(start_hack, current->phx_start, copy_len * sizeof(unsigned long));
+	copy_to_user(end_hack, current->phx_end, copy_len * sizeof(unsigned long));
+
 	phxprint("len: %lu\n", current->len);
 	if (put_user(copy_len, len))
 		return -EINVAL;
@@ -2451,22 +2451,25 @@ SYSCALL_DEFINE2(phx_preserve_meta, void __user *, data, unsigned int __user *, l
 	void *meta;
 	int i;
 
-	meta = kmalloc(sizeof(unsigned long) * (*len), GFP_KERNEL);
+	unsigned int buffer_len;
+	get_user(buffer_len, len);
+
+	meta = kmalloc(sizeof(unsigned long) * buffer_len, GFP_KERNEL);
 	if (!meta) {
 		return -ENOMEM;
 	}
 
-	// for (i = 0; i < *len; i++)
-	// 	meta[i] = ((unsigned long *)data)[i];
-	memcpy(meta, data, (*len)*sizeof (unsigned long));
+	copy_from_user(meta, data, buffer_len*sizeof (unsigned long));
 
 	current->phx_user_meta = meta;
-	current->meta_len = *len;
+	current->meta_len = buffer_len;
 
+#if 0
 	for (i = 0; i < *len; i++) {
-		phxprint("preserved meta i = %d, with meta = %lx\n", i, ((unsigned long *)data)[i]);
+		phxprint("preserved meta i = %d, with meta = %lx\n", i, ((unsigned long *)meta)[i]);
 	}
-	phxprint("!!!len = %lx\n", *len);
+#endif
+	phxprint("!!!len = %lx\n", buffer_len);
 	phxprint("current: user_meta: %lx\n", current->phx_user_meta);
 
 	return 0;
@@ -2475,22 +2478,26 @@ SYSCALL_DEFINE2(phx_preserve_meta, void __user *, data, unsigned int __user *, l
 SYSCALL_DEFINE2(phx_get_meta, void __user *, data, unsigned int __user *, len)
 {
 	//static const int PHX_RANGE_LIMIT = 64;
-	int i;
 	//int copy_len = PHX_RANGE_LIMIT < current->meta_len ? PHX_RANGE_LIMIT : current->meta_len;
 	int copy_len = current->meta_len;
-	if(*len < current->meta_len)
+	unsigned int buffer_size;
+	get_user(buffer_size, len);
+
+	if (buffer_size < current->meta_len)
 		return -EINVAL;
 
-	for (i = 0; i < copy_len; i++) {
-		phxprint("ptr for data %d: %lx\n", i,
-				((unsigned long *)current->phx_user_meta)[i]);
-		phxprint("copy to %lx\n", &(((unsigned long *)data)[i]));
-		if (put_user(((unsigned long *)current->phx_user_meta)[i], &(((unsigned long *)data)[i])))
-			return -EINVAL;
+	if (copy_to_user(data, current->phx_user_meta, copy_len * sizeof(unsigned long))) {
+		printk("phx: failed to copy to user address data 0x%lx len 0x%x", (unsigned long)data, copy_len);
+		return -EINVAL;
 	}
-	phxprint("len: %x\n", current->meta_len);
 	if (put_user(copy_len, len))
 		return -EINVAL;
+#if 0
+	for (int i = 0; i < copy_len; i++) {
+		phxprint("ptr for data %d: %lx\n", i,
+				((unsigned long *)current->phx_user_meta)[i]);
+	}
+#endif
 	phxprint("1\n");
 	kfree(current->phx_user_meta);
 	phxprint("2\n");
